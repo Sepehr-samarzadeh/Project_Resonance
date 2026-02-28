@@ -371,7 +371,8 @@ struct BetterProfileView: View {
         
         if let userId = UserManager.shared.getCurrentUserId() {
             let db = Firestore.firestore()
-            db.collection("users").document(userId).getDocument { doc, error in
+            Task {
+                let doc = try? await db.collection("users").document(userId).getDocument()
                 if let data = doc?.data(),
                    let user = AppUser(document: data) {
                     self.user = user
@@ -396,17 +397,15 @@ struct BetterProfileView: View {
         isDeleting = true
         deleteError = nil
         
-        UserManager.shared.deleteAccount(userId: userId) { result in
-            DispatchQueue.main.async {
-                isDeleting = false
-                switch result {
-                case .success:
-                    MatchManager.shared.stopListening()
-                    user = nil
-                case .failure(let error):
-                    deleteError = error.localizedDescription
-                }
+        Task {
+            do {
+                try await UserManager.shared.deleteAccount(userId: userId)
+                MatchManager.shared.stopListening()
+                user = nil
+            } catch {
+                deleteError = error.localizedDescription
             }
+            isDeleting = false
         }
     }
 }

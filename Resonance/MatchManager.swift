@@ -136,101 +136,78 @@ class MatchManager: ObservableObject {
         self.activeMatches = active
     }
     
-    func createMatch(currentUserId: String, otherUserId: String, listening: CurrentListening, completion: @escaping (Bool) -> Void) {
-        db.collection("matches")
-            .whereField("user1_id", in: [currentUserId, otherUserId])
-            .whereField("user2_id", in: [currentUserId, otherUserId])
-            .getDocuments { [weak self] snapshot, error in
-                guard let self = self else { return }
-                
-                if snapshot?.documents.first != nil {
-                    completion(false)
-                    return
-                }
-                
-                let match = Match(user1Id: currentUserId, user2Id: otherUserId, listening: listening)
-                
-                do {
-                    try self.db.collection("matches").addDocument(from: match) { error in
-                        completion(error == nil)
-                    }
-                } catch {
-                    completion(false)
-                }
+    func createMatch(currentUserId: String, otherUserId: String, listening: CurrentListening) async -> Bool {
+        do {
+            let snapshot = try await db.collection("matches")
+                .whereField("user1_id", in: [currentUserId, otherUserId])
+                .whereField("user2_id", in: [currentUserId, otherUserId])
+                .getDocuments()
+            
+            if snapshot.documents.first != nil {
+                return false
             }
+            
+            let match = Match(user1Id: currentUserId, user2Id: otherUserId, listening: listening)
+            try db.collection("matches").addDocument(from: match)
+            return true
+        } catch {
+            return false
+        }
     }
     
-
-    
-    
-    func acceptMatch(_ match: Match, myUserId: String, completion: @escaping (Bool) -> Void) {
-        guard let matchId = match.id else {
-            completion(false)
-            return
-        }
+    func acceptMatch(_ match: Match, myUserId: String) async -> Bool {
+        guard let matchId = match.id else { return false }
         
         let field = match.user1Id == myUserId ? "user1_accepted" : "user2_accepted"
         
-        db.collection("matches").document(matchId).getDocument { [weak self] document, error in
-            guard let self = self else { return }
+        do {
+            let document = try await db.collection("matches").document(matchId).getDocument()
+            guard document.exists else { return false }
             
-            guard document?.exists == true else {
-                completion(false)
-                return
-            }
-            
-            self.db.collection("matches").document(matchId).updateData([
+            try await db.collection("matches").document(matchId).updateData([
                 field: true
-            ]) { error in
-                if error != nil {
-                    completion(false)
-                    return
-                }
-                
-                var updatedMatch = match
-                if match.user1Id == myUserId {
-                    updatedMatch.user1Accepted = true
-                } else {
-                    updatedMatch.user2Accepted = true
-                }
-                
-                if updatedMatch.isBothAccepted {
-                    self.createChat(for: updatedMatch)
-                }
-                
-                completion(true)
-            }
-        }
-    }
-    
-    
-    func declineMatch(_ match: Match, completion: @escaping (Bool) -> Void) {
-        guard let matchId = match.id else {
-            completion(false)
-            return
-        }
-        
-        db.collection("matches").document(matchId).getDocument { [weak self] document, error in
-            guard document?.exists == true else {
-                completion(true)
-                return
+            ])
+            
+            var updatedMatch = match
+            if match.user1Id == myUserId {
+                updatedMatch.user1Accepted = true
+            } else {
+                updatedMatch.user2Accepted = true
             }
             
-            self?.db.collection("matches").document(matchId).delete { error in
-                completion(error == nil)
+            if updatedMatch.isBothAccepted {
+                await createChat(for: updatedMatch)
             }
+            
+            return true
+        } catch {
+            return false
         }
     }
     
-    private func createChat(for match: Match) {
+    func declineMatch(_ match: Match) async -> Bool {
+        guard let matchId = match.id else { return false }
+        
+        do {
+            let document = try await db.collection("matches").document(matchId).getDocument()
+            guard document.exists else { return true }
+            
+            try await db.collection("matches").document(matchId).delete()
+            return true
+        } catch {
+            return false
+        }
+    }
+    
+    private func createChat(for match: Match) async {
         guard let matchId = match.id else { return }
         
         let chat = Chat(matchId: matchId, user1Id: match.user1Id, user2Id: match.user2Id)
         
         do {
-            let chatRef = try db.collection("chats").addDocument(from: chat) { _ in }
+            let chatRef = try db.collection("chats").addDocument(from: chat)
             
-            db.collection("matches").document(matchId).updateData([
+            try await db.collection("matches").document(matchId).updateData([
                 "chat_id": chatRef.documentID
             ])
         } catch {
@@ -411,7 +388,8 @@ struct PotentialMatchRow: View {
     
     func loadUser() {
         let db = Firestore.firestore()
-        db.collection("users").document(match.userId).getDocument { doc, error in
+        Task {
+            let doc = try? await db.collection("users").document(match.userId).getDocument()
             if let data = doc?.data(),
                let user = AppUser(document: data) {
                 self.user = user
@@ -522,7 +500,8 @@ struct MatchPromptView: View {
     
     func loadUser() {
         let db = Firestore.firestore()
-        db.collection("users").document(match.userId).getDocument { doc, error in
+        Task {
+            let doc = try? await db.collection("users").document(match.userId).getDocument()
             if let data = doc?.data(),
                let user = AppUser(document: data) {
                 self.user = user
@@ -533,11 +512,12 @@ struct MatchPromptView: View {
     func sendMatchRequest() {
         isCreatingMatch = true
         
-        MatchManager.shared.createMatch(
-            currentUserId: currentUserId,
-            otherUserId: match.userId,
-            listening: currentListening
-        ) { success in
+        Task {
+            let _ = await MatchManager.shared.createMatch(
+                currentUserId: currentUserId,
+                otherUserId: match.userId,
+                listening: currentListening
+            )
             isCreatingMatch = false
             dismiss()
         }

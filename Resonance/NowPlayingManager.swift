@@ -49,46 +49,25 @@ class NowPlayingManager: ObservableObject {
     private func updateNowPlaying() async {
         guard let userId = currentUserId else { return }
         
-        SpotifyAPIManager.shared.getCurrentlyPlaying { [weak self] result in
-            guard let self = self else { return }
-            
-            switch result {
-            case .success(let playing):
-                let listening = CurrentListening(userId: userId, from: playing)
-                
-                DispatchQueue.main.async {
-                    self.currentListening = listening
-                    self.isPlaying = playing.isPlaying
+        do {
+            let playing = try await SpotifyAPIManager.shared.getCurrentlyPlaying()
+            let listening = CurrentListening(userId: userId, from: playing)
+            self.currentListening = listening
+            self.isPlaying = playing.isPlaying
+            self.errorMessage = nil
+            saveToFirebase(listening: listening)
+        } catch {
+            if let spotifyError = error as? SpotifyError {
+                switch spotifyError {
+                case .nothingPlaying:
+                    removeFromFirebase(userId: userId)
+                    self.currentListening = nil
+                    self.isPlaying = false
                     self.errorMessage = nil
-                }
-                
-                self.saveToFirebase(listening: listening)
-                
-            case .failure(let error):
-                if let spotifyError = error as? SpotifyError {
-                    switch spotifyError {
-                    case .nothingPlaying:
-                        self.removeFromFirebase(userId: userId)
-                        DispatchQueue.main.async {
-                            self.currentListening = nil
-                            self.isPlaying = false
-                            self.errorMessage = nil
-                        }
-                    case .tokenRefreshFailed, .noAccessToken, .noRefreshToken:
-                        DispatchQueue.main.async {
-                            self.errorMessage = "Session expired. Please reconnect Spotify in Profile."
-                        }
-                    default:
-                        DispatchQueue.main.async {
-                            self.errorMessage = spotifyError.localizedDescription
-                        }
-                    }
-                } else if (error as NSError).code == 204 {
-                    self.removeFromFirebase(userId: userId)
-                    DispatchQueue.main.async {
-                        self.currentListening = nil
-                        self.isPlaying = false
-                    }
+                case .tokenRefreshFailed, .noAccessToken, .noRefreshToken:
+                    self.errorMessage = "Session expired. Please reconnect Spotify in Profile."
+                default:
+                    self.errorMessage = spotifyError.localizedDescription
                 }
             }
         }

@@ -42,7 +42,7 @@ class UserManager {
     
     // MARK: - Account Deletion (Apple Requirement 5.1.1v)
     
-    func deleteAccount(userId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    func deleteAccount(userId: String) async throws {
         let batch = db.batch()
         
         // 1. Delete user document
@@ -54,67 +54,47 @@ class UserManager {
         batch.deleteDocument(listeningRef)
         
         // Commit batch for user data
-        batch.commit { [weak self] error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-            
-            guard let self = self else { return }
-            
-            // 3. Delete matches where user is involved
-            self.deleteUserMatches(userId: userId) {
-                // 4. Delete messages sent by user
-                self.deleteUserMessages(userId: userId) {
-                    // 5. Clear local data
-                    self.clearLocalData()
-                    NowPlayingManager.shared.stopTracking()
-                    
-                    completion(.success(()))
-                }
-            }
-        }
+        try await batch.commit()
+        
+        // 3. Delete matches where user is involved
+        await deleteUserMatches(userId: userId)
+        
+        // 4. Delete messages sent by user
+        await deleteUserMessages(userId: userId)
+        
+        // 5. Clear local data
+        clearLocalData()
+        NowPlayingManager.shared.stopTracking()
     }
     
-    private func deleteUserMatches(userId: String, completion: @escaping () -> Void) {
-        let group = DispatchGroup()
-        
+    private func deleteUserMatches(userId: String) async {
         // Matches as user1
-        group.enter()
-        db.collection("matches")
+        if let snapshot = try? await db.collection("matches")
             .whereField("user1_id", isEqualTo: userId)
-            .getDocuments { snapshot, _ in
-                snapshot?.documents.forEach { doc in
-                    doc.reference.delete()
-                }
-                group.leave()
+            .getDocuments() {
+            for doc in snapshot.documents {
+                try? await doc.reference.delete()
             }
+        }
         
         // Matches as user2
-        group.enter()
-        db.collection("matches")
+        if let snapshot = try? await db.collection("matches")
             .whereField("user2_id", isEqualTo: userId)
-            .getDocuments { snapshot, _ in
-                snapshot?.documents.forEach { doc in
-                    doc.reference.delete()
-                }
-                group.leave()
+            .getDocuments() {
+            for doc in snapshot.documents {
+                try? await doc.reference.delete()
             }
-        
-        group.notify(queue: .main) {
-            completion()
         }
     }
     
-    private func deleteUserMessages(userId: String, completion: @escaping () -> Void) {
-        db.collection("messages")
+    private func deleteUserMessages(userId: String) async {
+        if let snapshot = try? await db.collection("messages")
             .whereField("sender_id", isEqualTo: userId)
-            .getDocuments { snapshot, _ in
-                snapshot?.documents.forEach { doc in
-                    doc.reference.delete()
-                }
-                completion()
+            .getDocuments() {
+            for doc in snapshot.documents {
+                try? await doc.reference.delete()
             }
+        }
     }
     
     func clearLocalData() {

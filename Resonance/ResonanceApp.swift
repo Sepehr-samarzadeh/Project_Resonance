@@ -57,20 +57,23 @@ struct ResonanceApp: App {
             .joined(separator: "&")
             .data(using: .utf8)
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            guard error == nil,
-                  let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return
-            }
-            
-            if let accessToken = json["access_token"] as? String {
-                UserDefaults.standard.set(accessToken, forKey: "spotify_access_token")
-                
-                if let refreshToken = json["refresh_token"] as? String {
-                    UserDefaults.standard.set(refreshToken, forKey: "spotify_refresh_token")
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(for: request)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return
                 }
+                
+                if let accessToken = json["access_token"] as? String {
+                    UserDefaults.standard.set(accessToken, forKey: "spotify_access_token")
+                    
+                    if let refreshToken = json["refresh_token"] as? String {
+                        UserDefaults.standard.set(refreshToken, forKey: "spotify_refresh_token")
+                    }
+                }
+            } catch {
+                // Token exchange failed — user will need to log in again
             }
-        }.resume()
+        }
     }
 }

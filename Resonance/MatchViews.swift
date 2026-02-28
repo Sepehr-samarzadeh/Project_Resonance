@@ -154,7 +154,8 @@ struct PendingMatchCard: View {
         let otherUserId = match.otherUserId(myId: currentUserId)
         
         let db = Firestore.firestore()
-        db.collection("users").document(otherUserId).getDocument { doc, error in
+        Task {
+            let doc = try? await db.collection("users").document(otherUserId).getDocument()
             if let data = doc?.data(),
                let user = AppUser(document: data) {
                 self.otherUser = user
@@ -168,7 +169,8 @@ struct PendingMatchCard: View {
         isProcessing = true
         hasResponded = true
         
-        MatchManager.shared.acceptMatch(match, myUserId: currentUserId) { success in
+        Task {
+            let success = await MatchManager.shared.acceptMatch(match, myUserId: currentUserId)
             isProcessing = false
             if !success {
                 hasResponded = false
@@ -182,7 +184,8 @@ struct PendingMatchCard: View {
         isProcessing = true
         hasResponded = true
         
-        MatchManager.shared.declineMatch(match) { success in
+        Task {
+            let success = await MatchManager.shared.declineMatch(match)
             isProcessing = false
             if !success {
                 hasResponded = false
@@ -294,7 +297,8 @@ struct ActiveMatchRow: View {
         let otherUserId = match.otherUserId(myId: currentUserId)
         
         let db = Firestore.firestore()
-        db.collection("users").document(otherUserId).getDocument { doc, error in
+        Task {
+            let doc = try? await db.collection("users").document(otherUserId).getDocument()
             if let data = doc?.data(),
                let user = AppUser(document: data) {
                 self.otherUser = user

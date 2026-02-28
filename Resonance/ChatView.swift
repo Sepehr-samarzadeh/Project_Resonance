@@ -39,8 +39,7 @@ struct ChatView: View {
                     }
                     .padding(.horizontal)
                 }
-                .onChange(of: chatManager.messages.count) { _ in
-                    
+                .onChange(of: chatManager.messages.count) {
                     if let lastMessage = chatManager.messages.last {
                         withAnimation {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
@@ -117,7 +116,8 @@ struct ChatView: View {
     func loadOtherUser() {
         let otherUserId = match.otherUserId(myId: currentUserId)
         
-        db.collection("users").document(otherUserId).getDocument { doc, error in
+        Task {
+            let doc = try? await db.collection("users").document(otherUserId).getDocument()
             if let data = doc?.data(),
                let user = AppUser(document: data) {
                 self.otherUser = user
