@@ -59,22 +59,36 @@ struct NowPlayingView: View {
                 }
             } else {
                 VStack(spacing: 15) {
-                    //Image(.abstractbackground)
-                      //  .resizable()
-                        //.scaledToFill()
-                        //.ignoresSafeArea()
-                        //.font(.system(size: 60))
-                        //.foregroundColor(.gray)
+                    Image(systemName: "music.note")
+                        .font(.system(size: 60))
+                        .foregroundColor(.secondary)
+                        .accessibilityHidden(true)
                     
                     Text("Not playing anything")
                         .font(.title3)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
                     
                     Text("Start playing music on Spotify")
                         .font(.caption)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
                 }
                 .padding()
+            }
+            
+            // Error Banner
+            if let error = nowPlayingManager.errorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.yellow)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                    Spacer()
+                }
+                .padding()
+                .background(Color.yellow.opacity(0.15))
+                .cornerRadius(10)
+                .padding(.horizontal)
             }
             
             Spacer()
@@ -146,15 +160,14 @@ struct NowPlayingView: View {
                         self.currentUserId = spotifyUser.id
                     }
                 }
-            case .failure(let error):
-                print("error getting user: \(error)")
+            case .failure:
+                break
             }
         }
     }
     
     func startTracking() {
         guard let userId = currentUserId else {
-            print("No user ID")
             return
         }
         

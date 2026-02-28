@@ -4,12 +4,12 @@ import Combine
 
 
 @MainActor
-
 class NowPlayingManager: ObservableObject {
     static let shared = NowPlayingManager()
     
     @Published var currentListening: CurrentListening?
     @Published var isPlaying: Bool = false
+    @Published var errorMessage: String?
     
     private var timer: Timer?
     private let db = Firestore.firestore()
@@ -17,11 +17,9 @@ class NowPlayingManager: ObservableObject {
     
     private init() {}
     
-    
- 
     func startTracking(userId: String) {
         self.currentUserId = userId
-        print("Started tracking now playing for user: \(userId)")
+        errorMessage = nil
         
         Task {
             await updateNowPlaying()
@@ -39,22 +37,14 @@ class NowPlayingManager: ObservableObject {
         timer = nil
         
         if let userId = currentUserId {
-            db.collection("current_listening").document(userId).delete { error in
-                if let error = error {
-                    print("Error removing listening data: \(error)")
-                } else {
-                    print("Removed listening data from Firebase")
-                }
-            }
+            db.collection("current_listening").document(userId).delete()
         }
         
         currentUserId = nil
         currentListening = nil
         isPlaying = false
-        
-        print("Stopped tracking now playing")
+        errorMessage = nil
     }
-    
     
     private func updateNowPlaying() async {
         guard let userId = currentUserId else { return }
@@ -69,27 +59,36 @@ class NowPlayingManager: ObservableObject {
                 DispatchQueue.main.async {
                     self.currentListening = listening
                     self.isPlaying = playing.isPlaying
+                    self.errorMessage = nil
                 }
-                
                 
                 self.saveToFirebase(listening: listening)
                 
-                print("Now playing: \(listening.trackName) by \(listening.artistName)")
-                
             case .failure(let error):
-                
-                if (error as NSError).code == 204 {
-                    
+                if let spotifyError = error as? SpotifyError {
+                    switch spotifyError {
+                    case .nothingPlaying:
+                        self.removeFromFirebase(userId: userId)
+                        DispatchQueue.main.async {
+                            self.currentListening = nil
+                            self.isPlaying = false
+                            self.errorMessage = nil
+                        }
+                    case .tokenRefreshFailed, .noAccessToken, .noRefreshToken:
+                        DispatchQueue.main.async {
+                            self.errorMessage = "Session expired. Please reconnect Spotify in Profile."
+                        }
+                    default:
+                        DispatchQueue.main.async {
+                            self.errorMessage = spotifyError.localizedDescription
+                        }
+                    }
+                } else if (error as NSError).code == 204 {
                     self.removeFromFirebase(userId: userId)
-                    
                     DispatchQueue.main.async {
                         self.currentListening = nil
                         self.isPlaying = false
                     }
-                    
-                    print("Nothing playing")
-                } else {
-                    print("Error fetching now playing: \(error)")
                 }
             }
         }
@@ -97,24 +96,11 @@ class NowPlayingManager: ObservableObject {
     
     private func saveToFirebase(listening: CurrentListening) {
         let data = listening.toDictionary()
-        
-        db.collection("current_listening").document(listening.id).setData(data) { error in
-            if let error = error {
-                print("error saving to Firebase: \(error)")
-            } else {
-                print("Saved to Firebase: \(listening.trackName)")
-            }
-        }
+        db.collection("current_listening").document(listening.id).setData(data)
     }
     
     private func removeFromFirebase(userId: String) {
-        db.collection("current_listening").document(userId).delete { error in
-            if let error = error {
-                print("error removing from Firebase: \(error)")
-            } else {
-                print("removed from Firebase")
-            }
-        }
+        db.collection("current_listening").document(userId).delete()
     }
     
     func refreshNowPlaying() {

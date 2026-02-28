@@ -20,43 +20,31 @@ class MatchManager: ObservableObject {
     
     private let db = Firestore.firestore()
     private var listenersSnapshot: ListenerRegistration?
-    private var matchesSnapshot: ListenerRegistration?
+    private var matchUser1Listener: ListenerRegistration?
+    private var matchUser2Listener: ListenerRegistration?
+    private var matchListenersActive = false
     
     private init() {}
     
     func startListening(currentUserId: String, currentListening: CurrentListening?) {
-        guard let listening = currentListening else {
-            print("not listening to anything")
-            return
-        }
-        
-        print("started looking for matches...")
+        guard let listening = currentListening else { return }
         
         listenersSnapshot = db.collection("current_listening")
             .whereField("is_playing", isEqualTo: true)
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let self = self else { return }
-                
-                if let error = error {
-                    print("error listening for matches: \(error)")
-                    return
-                }
-                
                 guard let documents = snapshot?.documents else { return }
                 
-    
                 var matches: [PotentialMatch] = []
                 
                 for doc in documents {
                     let data = doc.data()
                     let userId = doc.documentID
                     
-                    
                     if userId == currentUserId { continue }
                     
                     let trackId = data["track_id"] as? String ?? ""
                     let artistId = data["artist_id"] as? String ?? ""
-                    
                     
                     if trackId == listening.trackId && !trackId.isEmpty {
                         if let otherListening = CurrentListening(userId: userId, document: data) {
@@ -66,9 +54,7 @@ class MatchManager: ObservableObject {
                                 matchType: .sameTrack
                             ))
                         }
-                    }
-                  
-                    else if artistId == listening.artistId && !artistId.isEmpty {
+                    } else if artistId == listening.artistId && !artistId.isEmpty {
                         if let otherListening = CurrentListening(userId: userId, document: data) {
                             matches.append(PotentialMatch(
                                 userId: userId,
@@ -79,70 +65,44 @@ class MatchManager: ObservableObject {
                     }
                 }
                 
-                DispatchQueue.main.async {
-                    self.potentialMatches = matches
-                    print("Found \(matches.count) potential matches")
-                }
+                self.potentialMatches = matches
             }
         
-        listenMyMatches(userId: currentUserId)
+        startMatchListeners(userId: currentUserId)
     }
     
-   
     func stopListening() {
         listenersSnapshot?.remove()
-        matchesSnapshot?.remove()
+        matchUser1Listener?.remove()
+        matchUser2Listener?.remove()
+        listenersSnapshot = nil
+        matchUser1Listener = nil
+        matchUser2Listener = nil
+        matchListenersActive = false
         potentialMatches = []
-        print("Stopped looking for matches")
     }
     
-
+    // MARK: - Centralized Match Listeners (called once, not per-view)
     
-    private func listenMyMatches(userId: String) {
-        print("Setting up match listeners for user: \(userId)")
+    func startMatchListeners(userId: String) {
+        guard !matchListenersActive else { return }
+        matchListenersActive = true
         
-        // Listen for matches where Im user1
-        db.collection("matches")
+        matchUser1Listener = db.collection("matches")
             .whereField("user1_id", isEqualTo: userId)
             .addSnapshotListener { [weak self] snapshot, error in
-                print("User1 matches callback - Documents: \(snapshot?.documents.count ?? 0)")
-                
-                if let docs = snapshot?.documents {
-                    for doc in docs {
-                        print("Match doc: \(doc.documentID) - \(doc.data())")
-                    }
-                }
-                
                 self?.handleMatchesSnapshot(snapshot: snapshot, error: error, myUserId: userId)
             }
         
-        // Listen for matches where Im user2
-        db.collection("matches")
+        matchUser2Listener = db.collection("matches")
             .whereField("user2_id", isEqualTo: userId)
             .addSnapshotListener { [weak self] snapshot, error in
-                print("User2 matches callback - Documents: \(snapshot?.documents.count ?? 0)")
-                
-                if let docs = snapshot?.documents {
-                    for doc in docs {
-                        print(" Match doc: \(doc.documentID) - \(doc.data())")
-                    }
-                }
-                
                 self?.handleMatchesSnapshot(snapshot: snapshot, error: error, myUserId: userId)
             }
     }
     
-    
-    
-    func handleMatchesSnapshot(snapshot: QuerySnapshot?, error: Error?, myUserId: String) {
-        if let error = error {
-            print("Error listening for matches: \(error)")
-            return
-        }
-        
+    private func handleMatchesSnapshot(snapshot: QuerySnapshot?, error: Error?, myUserId: String) {
         guard let documents = snapshot?.documents else { return }
-        
-        print("Processing \(documents.count) match documents")
         
         var pending: [Match] = []
         var active: [Match] = []
@@ -152,54 +112,28 @@ class MatchManager: ObservableObject {
                 var match = try doc.data(as: Match.self)
                 match.id = doc.documentID
                 
-                print("Match: user1=\(match.user1Id), user2=\(match.user2Id)")
-                print("Status: user1_accepted=\(match.user1Accepted), user2_accepted=\(match.user2Accepted)")
-                
-                // Am I user1 or user2?
                 let amUser1 = match.user1Id == myUserId
                 let myStatus = amUser1 ? match.user1Accepted : match.user2Accepted
                 let otherStatus = amUser1 ? match.user2Accepted : match.user1Accepted
                 
-                // IMPORTANT: Only show in pending if OTHER person initiated and I havent responded
-                // User1 initiates, so user2 sees it as pending
-                // User1 should NOT see their own match request as pending
-                
                 if amUser1 {
-                    // Im user1 (I sent the request)
                     if myStatus && otherStatus {
-                        // Both accepted - show in active
                         active.append(match)
-                        print("  Added to ACTIVE (both accepted)")
-                    } else {
-                        // Waiting for user2 to respond - dont show anywhere yet
-                        print("  WAITING for user2 to accept (I initiated)")
                     }
                 } else {
-                    // Im user2 (I received the request)
                     if !myStatus {
-                        // I havent accepted yet - show in pending
                         pending.append(match)
-                        print("  Added to PENDING (I need to respond)")
                     } else if myStatus && otherStatus {
-                        // Both accepted - show in active
                         active.append(match)
-                        print("   Added to ACTIVE (both accepted)")
-                    } else {
-                        // i accepted, waiting for user1 (shouldnt happen since user1 autoaccepts)
-                        print("  WAITING (I accepted, waiting for user1)")
                     }
                 }
-                
             } catch {
-                print("Error decoding match: \(error)")
+                // Skip malformed documents
             }
         }
         
-        DispatchQueue.main.async {
-            self.pendingMatches = pending
-            self.activeMatches = active
-            print("Updated: \(pending.count) pending, \(active.count) active")
-        }
+        self.pendingMatches = pending
+        self.activeMatches = active
     }
     
     func createMatch(currentUserId: String, otherUserId: String, listening: CurrentListening, completion: @escaping (Bool) -> Void) {
@@ -209,8 +143,7 @@ class MatchManager: ObservableObject {
             .getDocuments { [weak self] snapshot, error in
                 guard let self = self else { return }
                 
-                if let existingMatch = snapshot?.documents.first {
-                    print("Match already exists")
+                if snapshot?.documents.first != nil {
                     completion(false)
                     return
                 }
@@ -219,16 +152,9 @@ class MatchManager: ObservableObject {
                 
                 do {
                     try self.db.collection("matches").addDocument(from: match) { error in
-                        if let error = error {
-                            print("Error creating match: \(error)")
-                            completion(false)
-                        } else {
-                            print("Match created!")
-                            completion(true)
-                        }
+                        completion(error == nil)
                     }
                 } catch {
-                    print("Error encoding match: \(error)")
                     completion(false)
                 }
             }
@@ -238,52 +164,29 @@ class MatchManager: ObservableObject {
     
     
     func acceptMatch(_ match: Match, myUserId: String, completion: @escaping (Bool) -> Void) {
-        print("ACCEPT MATCH CALLED")
-        print("   Match ID: \(match.id ?? "nil")")
-        print("   My User ID: \(myUserId)")
-        print("   User1: \(match.user1Id), User2: \(match.user2Id)")
-        
         guard let matchId = match.id else {
-            print("No match ID")
             completion(false)
             return
         }
         
-        // Determine which field to update
         let field = match.user1Id == myUserId ? "user1_accepted" : "user2_accepted"
-        print("   Updating field: \(field)")
         
-        // First check if document still exists
         db.collection("matches").document(matchId).getDocument { [weak self] document, error in
             guard let self = self else { return }
             
-            if let error = error {
-                print(" Error checking match: \(error)")
-                completion(false)
-                return
-            }
-            
             guard document?.exists == true else {
-                print(" Match document no longer exists")
                 completion(false)
                 return
             }
             
-            print("Document exists, updating...")
-            
-            // Update the match
             self.db.collection("matches").document(matchId).updateData([
                 field: true
             ]) { error in
-                if let error = error {
-                    print("Error updating match: \(error)")
+                if error != nil {
                     completion(false)
                     return
                 }
                 
-                print("Match field updated successfully!")
-                
-                // Check if both accepted - create chat
                 var updatedMatch = match
                 if match.user1Id == myUserId {
                     updatedMatch.user1Accepted = true
@@ -291,13 +194,8 @@ class MatchManager: ObservableObject {
                     updatedMatch.user2Accepted = true
                 }
                 
-                print("   Updated match status: user1=\(updatedMatch.user1Accepted), user2=\(updatedMatch.user2Accepted)")
-                
                 if updatedMatch.isBothAccepted {
-                    print("Both users accepted - creating chat!")
                     self.createChat(for: updatedMatch)
-                } else {
-                    print(" Waiting for other user to accept")
                 }
                 
                 completion(true)
@@ -307,42 +205,19 @@ class MatchManager: ObservableObject {
     
     
     func declineMatch(_ match: Match, completion: @escaping (Bool) -> Void) {
-        print("DECLINE MATCH CALLED")
-        print(" Match ID: \(match.id ?? "nil")")
-        
         guard let matchId = match.id else {
-            print(" No match ID")
             completion(false)
             return
         }
         
-        print("Declining match: \(matchId)")
-        
-        // First check if document still exists
         db.collection("matches").document(matchId).getDocument { [weak self] document, error in
-            if let error = error {
-                print(" Error checking match: \(error)")
-                completion(false)
-                return
-            }
-            
             guard document?.exists == true else {
-                print(" Match already deleted")
                 completion(true)
                 return
             }
             
-            print("Deleting match document...")
-            
-            // Delete the match
             self?.db.collection("matches").document(matchId).delete { error in
-                if let error = error {
-                    print(" Error deleting match: \(error)")
-                    completion(false)
-                } else {
-                    print(" Match deleted successfully")
-                    completion(true)
-                }
+                completion(error == nil)
             }
         }
     }
@@ -353,21 +228,13 @@ class MatchManager: ObservableObject {
         let chat = Chat(matchId: matchId, user1Id: match.user1Id, user2Id: match.user2Id)
         
         do {
-            let chatRef = try db.collection("chats").addDocument(from: chat) { error in
-                if let error = error {
-                    print("Error creating chat: \(error)")
-                    return
-                }
-                print("Chat created!")
-            }
+            let chatRef = try db.collection("chats").addDocument(from: chat) { _ in }
             
-            // Update match with chat ID
             db.collection("matches").document(matchId).updateData([
                 "chat_id": chatRef.documentID
             ])
-            
         } catch {
-            print("Error encoding chat: \(error)")
+            // Chat creation failed silently
         }
     }
 }
@@ -393,7 +260,7 @@ struct DiscoveryView: View {
     @State private var showMatchPrompt = false
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack {
                 // Current Listening Section
                 if let listening = nowPlayingManager.currentListening {
@@ -413,7 +280,7 @@ struct DiscoveryView: View {
                             .font(.system(size: 50))
                             .foregroundColor(.gray)
                         Text("No one listening to similar music right now")
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
                     .padding()
@@ -453,7 +320,6 @@ struct DiscoveryView: View {
         
         guard let userId = currentUserId,
               let listening = nowPlayingManager.currentListening else {
-            print("Not ready for discovery")
             return
         }
         
@@ -673,15 +539,7 @@ struct MatchPromptView: View {
             listening: currentListening
         ) { success in
             isCreatingMatch = false
-            
-            if success {
-                print(" Match request sent!")
-                dismiss()
-            } else {
-                print("Match already exists or failed")
-                // Still dismiss - the match exists!
-                dismiss()
-            }
+            dismiss()
         }
     }
 }

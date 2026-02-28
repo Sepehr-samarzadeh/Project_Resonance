@@ -70,7 +70,6 @@ func generateCodeChallenge(from verifier: String) -> String {
     
    
     if let authURL = components?.url {
-        print("Auth URL : \(authURL.absoluteString)")
         UIApplication.shared.open(authURL)
     }
     

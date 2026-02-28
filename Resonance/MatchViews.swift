@@ -14,21 +14,22 @@ struct PendingMatchesView: View {
     @State private var currentUserId: String?
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Group {
                 if matchManager.pendingMatches.isEmpty {
                     VStack(spacing: 20) {
                         Image(systemName: "bell.slash")
                             .font(.system(size: 60))
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
+                            .accessibilityHidden(true)
                         
                         Text("No pending matches")
                             .font(.title3)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                         
                         Text("When someone wants to match with you, they'll appear here")
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
                     }
@@ -43,48 +44,12 @@ struct PendingMatchesView: View {
             .navigationTitle("Match Requests")
             .onAppear {
                 currentUserId = UserManager.shared.getCurrentUserId()
-                
-                // IMPORTANT: Start listening for matches when view appears
+                // MatchManager handles listeners centrally — no duplicate setup needed
                 if let userId = currentUserId {
-                    print("PendingMatchesView appeared - starting match listener for user: \(userId)")
-                    
-                    // create a dummy listening object just to start the listener
-                    // or call the listener directly without requiring current_listening
-                    startMatchListener(userId: userId)
+                    matchManager.startMatchListeners(userId: userId)
                 }
             }
         }
-    }
-    
-    //  start match listener independently
-    func startMatchListener(userId: String) {
-        let db = Firestore.firestore()
-        
-        // Listen for matches where Im user1
-        db.collection("matches")
-            .whereField("user1_id", isEqualTo: userId)
-            .addSnapshotListener { snapshot, error in
-                if let error = error {
-                    print("Error listening for user1 matches: \(error)")
-                    return
-                }
-                
-                print("User1 matches: \(snapshot?.documents.count ?? 0)")
-                matchManager.handleMatchesSnapshot(snapshot: snapshot, error: error, myUserId: userId)
-            }
-        
-        // Listen for matches where Im user2
-        db.collection("matches")
-            .whereField("user2_id", isEqualTo: userId)
-            .addSnapshotListener { snapshot, error in
-                if let error = error {
-                    print("Error listening for user2 matches: \(error)")
-                    return
-                }
-                
-                print("User2 matches: \(snapshot?.documents.count ?? 0)")
-                matchManager.handleMatchesSnapshot(snapshot: snapshot, error: error, myUserId: userId)
-            }
     }
 }
 
@@ -96,12 +61,12 @@ struct PendingMatchCard: View {
     
     @State private var otherUser: AppUser?
     @State private var isProcessing = false
-    @State private var hasResponded = false //if user already responded
+    @State private var hasResponded = false
+    @State private var showDeclineConfirmation = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
             HStack(spacing: 12) {
-                // NEW: Use ProfileImageView instead
                 ProfileImageView(
                     imageUrl: otherUser?.imageUrl,
                     size: 60,
@@ -111,22 +76,17 @@ struct PendingMatchCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(otherUser?.name ?? "Loading...")
                         .font(.headline)
-                        .foregroundColor(.white)
                     
                     Text("wants to match with you!")
                         .font(.subheadline)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
                 }
                 
                 Spacer()
             }
             
-            //add picture of the user
-        
-            // action Buttons
             VStack(spacing: 12) {
                 Button {
-                    print("ACCEPT BUTTON TAPPED")
                     acceptMatch()
                 } label: {
                     if isProcessing {
@@ -146,11 +106,11 @@ struct PendingMatchCard: View {
                     }
                 }
                 .disabled(isProcessing || hasResponded)
-                .buttonStyle(PlainButtonStyle()) // ADDED: Prevent gesture conflicts
+                .buttonStyle(PlainButtonStyle())
+                .accessibilityLabel("Accept match with \(otherUser?.name ?? "user")")
                 
                 Button {
-                    print("DECLINE BUTTON TAPPED")
-                    declineMatch()
+                    showDeclineConfirmation = true
                 } label: {
                     HStack {
                         Image(systemName: "xmark.circle.fill")
@@ -158,21 +118,33 @@ struct PendingMatchCard: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .background(Color.gray.opacity(0.2))
+                    .background(Color(UIColor.secondarySystemBackground))
                     .foregroundColor(.red)
                     .cornerRadius(8)
                 }
                 .disabled(isProcessing || hasResponded)
-                .buttonStyle(PlainButtonStyle()) // ADDED: Prevent gesture conflicts (might get buggy later check it later)
+                .buttonStyle(PlainButtonStyle())
+                .accessibilityLabel("Decline match with \(otherUser?.name ?? "user")")
             }
         }
-        .opacity(hasResponded ? 0.5 : 1.0) // fade out when responded
+        .opacity(hasResponded ? 0.5 : 1.0)
         .padding()
-        .background(Color.white)
+        .background(Color(UIColor.secondarySystemBackground))
         .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.1), radius: 5)
         .onAppear {
             loadOtherUser()
+        }
+        .confirmationDialog(
+            "Decline match with \(otherUser?.name ?? "this user")?",
+            isPresented: $showDeclineConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Decline", role: .destructive) {
+                declineMatch()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This action cannot be undone.")
         }
     }
     
@@ -194,14 +166,12 @@ struct PendingMatchCard: View {
         guard !hasResponded else { return }
         
         isProcessing = true
-        hasResponded = true // mark as responded immediately
+        hasResponded = true
         
         MatchManager.shared.acceptMatch(match, myUserId: currentUserId) { success in
             isProcessing = false
-            if success {
-                print("Match accepted!")
-            } else {
-                hasResponded = false // reset on failure
+            if !success {
+                hasResponded = false
             }
         }
     }
@@ -210,14 +180,12 @@ struct PendingMatchCard: View {
         guard !hasResponded else { return }
         
         isProcessing = true
-        hasResponded = true // mark as responded immediately
+        hasResponded = true
         
         MatchManager.shared.declineMatch(match) { success in
             isProcessing = false
-            if success {
-                print("Match declined")
-            } else {
-                hasResponded = false // reset on failure
+            if !success {
+                hasResponded = false
             }
         }
     }
@@ -236,21 +204,22 @@ struct ActiveMatchesView: View {
     @State private var currentUserId: String?
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Group {
                 if matchManager.activeMatches.isEmpty {
                     VStack(spacing: 20) {
                         Image(systemName: "bubble.left.and.bubble.right")
                             .font(.system(size: 60))
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
+                            .accessibilityHidden(true)
                         
                         Text("No active chats")
                             .font(.title3)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                         
                         Text("Accept match requests to start chatting")
                             .font(.caption)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
                 } else {

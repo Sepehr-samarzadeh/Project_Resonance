@@ -35,14 +35,9 @@ struct ProfileImageView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: size, height: size)
                             .clipShape(Circle())
-                            .onAppear {
-                                print("✅ Image loaded successfully: \(urlString)")
-                            }
-                    case .failure(let error):
+                    case .failure:
                         fallbackInitials
                             .onAppear {
-                                print("❌ Image load failed for: \(urlString)")
-                                print("   Error: \(error)")
                                 loadFailed = true
                             }
                     @unknown default:
@@ -51,15 +46,9 @@ struct ProfileImageView: View {
                 }
             } else {
                 fallbackInitials
-                    .onAppear {
-                        if let urlString = imageUrl {
-                            print("⚠️ Using fallback for URL: \(urlString)")
-                        } else {
-                            print("⚠️ No image URL provided, using initials")
-                        }
-                    }
             }
         }
+        .accessibilityLabel(fallbackName ?? "Profile image")
     }
     
     var fallbackInitials: some View {
@@ -235,6 +224,9 @@ struct FeatureRow: View {
 struct BetterProfileView: View {
     @State private var user: AppUser?
     @State private var isLoading = true
+    @State private var showDeleteConfirmation = false
+    @State private var isDeleting = false
+    @State private var deleteError: String?
     
     var body: some View {
         ZStack {
@@ -317,6 +309,21 @@ struct BetterProfileView: View {
                         .padding(.horizontal)
                         .padding(.top, 20)
                         
+                        // Delete Account Button (Apple Requirement 5.1.1v)
+                        Button {
+                            showDeleteConfirmation = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "trash")
+                                Text("Delete Account")
+                            }
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.red.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                        }
+                        .padding(.horizontal)
+                        
                     } else {
                         // Not logged in
                         BeautifulLoginView()
@@ -326,6 +333,36 @@ struct BetterProfileView: View {
         }
         .onAppear {
             loadUser()
+        }
+        .alert("Delete Account", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteAccount()
+            }
+        } message: {
+            Text("This will permanently delete your account and all your data. This action cannot be undone.")
+        }
+        .alert("Error", isPresented: .init(
+            get: { deleteError != nil },
+            set: { if !$0 { deleteError = nil } }
+        )) {
+            Button("OK") { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
+        }
+        .overlay {
+            if isDeleting {
+                Color.black.opacity(0.5)
+                    .ignoresSafeArea()
+                    .overlay {
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .tint(.white)
+                            Text("Deleting account...")
+                                .foregroundColor(.white)
+                        }
+                    }
+            }
         }
     }
     
@@ -347,11 +384,30 @@ struct BetterProfileView: View {
     }
     
     func logout() {
-        UserDefaults.standard.removeObject(forKey: "spotify_access_token")
-        UserDefaults.standard.removeObject(forKey: "spotify_refresh_token")
-        UserDefaults.standard.removeObject(forKey: "current_user_id")
+        UserManager.shared.clearLocalData()
         NowPlayingManager.shared.stopTracking()
+        MatchManager.shared.stopListening()
         user = nil
+    }
+    
+    func deleteAccount() {
+        guard let userId = UserManager.shared.getCurrentUserId() else { return }
+        
+        isDeleting = true
+        deleteError = nil
+        
+        UserManager.shared.deleteAccount(userId: userId) { result in
+            DispatchQueue.main.async {
+                isDeleting = false
+                switch result {
+                case .success:
+                    MatchManager.shared.stopListening()
+                    user = nil
+                case .failure(let error):
+                    deleteError = error.localizedDescription
+                }
+            }
+        }
     }
 }
 

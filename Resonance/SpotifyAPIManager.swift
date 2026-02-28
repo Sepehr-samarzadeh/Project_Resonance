@@ -5,12 +5,37 @@
 //  Created by Sepehr on 14/12/2025.
 //
 
-
 import Foundation
+
+enum SpotifyError: LocalizedError {
+    case noAccessToken
+    case noRefreshToken
+    case tokenRefreshFailed
+    case nothingPlaying
+    case networkError(Error)
+    case decodingError(Error)
+    case noData
+    case httpError(Int)
+    
+    var errorDescription: String? {
+        switch self {
+        case .noAccessToken: return "Not connected to Spotify. Please log in."
+        case .noRefreshToken: return "Session expired. Please log in again."
+        case .tokenRefreshFailed: return "Could not refresh session. Please log in again."
+        case .nothingPlaying: return "Nothing is playing right now."
+        case .networkError(let error): return "Network error: \(error.localizedDescription)"
+        case .decodingError: return "Unexpected response from Spotify."
+        case .noData: return "No response from Spotify."
+        case .httpError(let code): return "Spotify returned error \(code)."
+        }
+    }
+}
 
 @MainActor
 class SpotifyAPIManager {
     static let shared = SpotifyAPIManager()
+    
+    private var isRefreshing = false
     
     private init() {}
     
@@ -18,81 +43,152 @@ class SpotifyAPIManager {
         return UserDefaults.standard.string(forKey: "spotify_access_token")
     }
     
-    func getCurrentUserProfile(completion: @escaping (Result<SpotifyUser, Error>) -> Void) {
-        guard let accessToken = getAccessToken() else {
-            completion(.failure(NSError(domain: "No access token", code: 401)))
+    // MARK: - Token Refresh
+    
+    func refreshAccessToken(completion: @escaping (Bool) -> Void) {
+        guard let refreshToken = UserDefaults.standard.string(forKey: "spotify_refresh_token") else {
+            completion(false)
             return
         }
         
-        var request = URLRequest(url: URL(string: "https://api.spotify.com/v1/me")!)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        guard !isRefreshing else {
+            // Already refreshing, wait a bit and check again
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                completion(self.getAccessToken() != nil)
+            }
+            return
+        }
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                completion(.failure(error))
+        isRefreshing = true
+        
+        let clientId = Secrets.spotifyClientId
+        
+        var request = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let bodyParams = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": clientId
+        ]
+        
+        request.httpBody = bodyParams.map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            defer {
+                DispatchQueue.main.async {
+                    self?.isRefreshing = false
+                }
+            }
+            
+            if error != nil {
+                completion(false)
                 return
             }
             
-            guard let data = data else {
-                completion(.failure(NSError(domain: "No data", code: 500)))
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let accessToken = json["access_token"] as? String else {
+                completion(false)
                 return
             }
-            if let responseString = String(data: data, encoding: .utf8) {
-                print("Raw profile response: \(responseString)")
+            
+            UserDefaults.standard.set(accessToken, forKey: "spotify_access_token")
+            
+            // Spotify may return a new refresh token
+            if let newRefreshToken = json["refresh_token"] as? String {
+                UserDefaults.standard.set(newRefreshToken, forKey: "spotify_refresh_token")
             }
             
-            do {
-                let user = try JSONDecoder().decode(SpotifyUser.self, from: data)
-                completion(.success(user))
-            } catch {
-                print("Decode error: \(error)")
-                completion(.failure(error))
-            }
+            completion(true)
         }.resume()
     }
     
-    func getCurrentlyPlaying(completion: @escaping (Result<SpotifyCurrentlyPlaying, Error>) -> Void) {
+    // MARK: - API Calls with Auto-Refresh
+    
+    private func makeAuthenticatedRequest(url: URL, retryOnUnauthorized: Bool = true, completion: @escaping (Result<(Data, HTTPURLResponse), SpotifyError>) -> Void) {
         guard let accessToken = getAccessToken() else {
-            completion(.failure(NSError(domain: "No access token", code: 401)))
+            completion(.failure(.noAccessToken))
             return
         }
         
-        var request = URLRequest(url: URL(string: "https://api.spotify.com/v1/me/player/currently-playing")!)
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             if let error = error {
-                completion(.failure(error))
+                completion(.failure(.networkError(error)))
                 return
             }
             
-            if let httpResponse = response as? HTTPURLResponse {
-                if httpResponse.statusCode == 204 {
-                    // 204 = No content playing
-                    print("Nothing playing right now")
-                    completion(.failure(NSError(domain: "Nothing playing", code: 204)))
-                    return
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(.noData))
+                return
+            }
+            
+            // Token expired — try refreshing once
+            if httpResponse.statusCode == 401 && retryOnUnauthorized {
+                self?.refreshAccessToken { success in
+                    if success {
+                        self?.makeAuthenticatedRequest(url: url, retryOnUnauthorized: false, completion: completion)
+                    } else {
+                        completion(.failure(.tokenRefreshFailed))
+                    }
                 }
+                return
             }
             
             guard let data = data else {
-                completion(.failure(NSError(domain: "No data", code: 500)))
+                completion(.failure(.noData))
                 return
             }
             
-            
-            do {
-                let playing = try JSONDecoder().decode(SpotifyCurrentlyPlaying.self, from: data)
-                completion(.success(playing))
-            } catch {
-                print("Decode error: \(error)")
-                if let jsonString = String(data: data, encoding: .utf8) {
-                    print("Raw JSON: \(jsonString)")
-                }
-                completion(.failure(error))
-            }
+            completion(.success((data, httpResponse)))
         }.resume()
+    }
+    
+    func getCurrentUserProfile(completion: @escaping (Result<SpotifyUser, Error>) -> Void) {
+        let url = URL(string: "https://api.spotify.com/v1/me")!
+        
+        makeAuthenticatedRequest(url: url) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success((let data, _)):
+                do {
+                    let user = try JSONDecoder().decode(SpotifyUser.self, from: data)
+                    completion(.success(user))
+                } catch {
+                    completion(.failure(SpotifyError.decodingError(error)))
+                }
+            }
+        }
+    }
+    
+    func getCurrentlyPlaying(completion: @escaping (Result<SpotifyCurrentlyPlaying, Error>) -> Void) {
+        let url = URL(string: "https://api.spotify.com/v1/me/player/currently-playing")!
+        
+        makeAuthenticatedRequest(url: url) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success((let data, let httpResponse)):
+                if httpResponse.statusCode == 204 {
+                    completion(.failure(SpotifyError.nothingPlaying))
+                    return
+                }
+                
+                do {
+                    let playing = try JSONDecoder().decode(SpotifyCurrentlyPlaying.self, from: data)
+                    completion(.success(playing))
+                } catch {
+                    completion(.failure(SpotifyError.decodingError(error)))
+                }
+            }
+        }
     }
 }
