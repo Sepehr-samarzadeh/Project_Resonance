@@ -1,0 +1,37 @@
+# Xcode
+build/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.moved-aside
+xcuserdata/
+
+# Xcode Scheme
+*.xcscheme
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+
+# CocoaPods
+Pods/
+
+# Secrets & Credentials
+GoogleService-Info.plist
+Resonance/Secrets.swift
+
+# OS files
+.DS_Store
+*.swp
+*~
+Thumbs.db
+
+# Archives
+*.ipa
+*.dSYM.zip
+*.dSYM
