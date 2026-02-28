@@ -139,4 +139,22 @@ class SpotifyAPIManager {
         
         return try JSONDecoder().decode(SpotifyCurrentlyPlaying.self, from: data)
     }
+    
+    // MARK: - Top Artists (for richer matching)
+    
+    func getTopArtists(limit: Int = 10, timeRange: String = "medium_term") async throws -> [SpotifyArtistFull] {
+        let url = URL(string: "https://api.spotify.com/v1/me/top/artists?limit=\(limit)&time_range=\(timeRange)")!
+        let (data, _) = try await makeAuthenticatedRequest(url: url)
+        let response = try JSONDecoder().decode(SpotifyTopArtistsResponse.self, from: data)
+        return response.items
+    }
+    
+    // MARK: - Recently Played
+    
+    func getRecentlyPlayed(limit: Int = 20) async throws -> [SpotifyPlayHistoryItem] {
+        let url = URL(string: "https://api.spotify.com/v1/me/player/recently-played?limit=\(limit)")!
+        let (data, _) = try await makeAuthenticatedRequest(url: url)
+        let response = try JSONDecoder().decode(SpotifyRecentlyPlayedResponse.self, from: data)
+        return response.items
+    }
 }

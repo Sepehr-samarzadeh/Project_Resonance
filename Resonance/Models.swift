@@ -52,6 +52,27 @@ struct SpotifyAlbum: Codable {
     let images: [SpotifyImage]
 }
 
+// Spotify Top Artists response
+struct SpotifyTopArtistsResponse: Codable {
+    let items: [SpotifyArtistFull]
+}
+
+struct SpotifyArtistFull: Codable {
+    let id: String
+    let name: String
+    let genres: [String]?
+    let images: [SpotifyImage]?
+}
+
+// Spotify Recently Played response
+struct SpotifyRecentlyPlayedResponse: Codable {
+    let items: [SpotifyPlayHistoryItem]
+}
+
+struct SpotifyPlayHistoryItem: Codable {
+    let track: SpotifyTrack
+}
+
 //firebase models
 
 /// User in database
@@ -61,12 +82,21 @@ struct AppUser: Codable, Identifiable {
     let imageUrl: String?
     var isOnline: Bool
     var lastActive: Date
+    var bio: String?
+    var favoriteGenres: [String]?
+    var topArtistIds: [String]?
+    var topArtistNames: [String]?
+    var fcmToken: String?
     
     enum CodingKeys: String, CodingKey {
-        case id, name
+        case id, name, bio
         case imageUrl = "image_url"
         case isOnline = "is_online"
         case lastActive = "last_active"
+        case favoriteGenres = "favorite_genres"
+        case topArtistIds = "top_artist_ids"
+        case topArtistNames = "top_artist_names"
+        case fcmToken = "fcm_token"
     }
     
     // Convert from Spotify user
@@ -76,17 +106,28 @@ struct AppUser: Codable, Identifiable {
         self.imageUrl = spotifyUser.images?.first?.url
         self.isOnline = true
         self.lastActive = Date()
+        self.bio = nil
+        self.favoriteGenres = nil
+        self.topArtistIds = nil
+        self.topArtistNames = nil
+        self.fcmToken = nil
     }
     
     // Convert to Firebase dictionary
     func toDictionary() -> [String: Any] {
-        return [
+        var dict: [String: Any] = [
             "id": id,
             "name": name,
             "image_url": imageUrl as Any,
             "is_online": isOnline,
             "last_active": Timestamp(date: lastActive)
         ]
+        if let bio = bio { dict["bio"] = bio }
+        if let genres = favoriteGenres { dict["favorite_genres"] = genres }
+        if let ids = topArtistIds { dict["top_artist_ids"] = ids }
+        if let names = topArtistNames { dict["top_artist_names"] = names }
+        if let token = fcmToken { dict["fcm_token"] = token }
+        return dict
     }
 }
 
@@ -110,6 +151,18 @@ struct CurrentListening: Codable, Identifiable {
         case imageUrl = "image_url"
         case isPlaying = "is_playing"
         case updatedAt = "updated_at"
+    }
+    
+    // Basic memberwise init
+    init(userId: String, trackId: String, trackName: String, artistId: String, artistName: String, imageUrl: String?, isPlaying: Bool) {
+        self.id = userId
+        self.trackId = trackId
+        self.trackName = trackName
+        self.artistId = artistId
+        self.artistName = artistName
+        self.imageUrl = imageUrl
+        self.isPlaying = isPlaying
+        self.updatedAt = Date()
     }
     
     // Create from Spotify response
@@ -323,6 +376,11 @@ extension AppUser {
         self.imageUrl = document["image_url"] as? String
         self.isOnline = isOnline
         self.lastActive = lastActiveTimestamp.dateValue()
+        self.bio = document["bio"] as? String
+        self.favoriteGenres = document["favorite_genres"] as? [String]
+        self.topArtistIds = document["top_artist_ids"] as? [String]
+        self.topArtistNames = document["top_artist_names"] as? [String]
+        self.fcmToken = document["fcm_token"] as? String
     }
 }
 

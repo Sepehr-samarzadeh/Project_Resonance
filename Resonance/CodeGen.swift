@@ -49,7 +49,7 @@ func generateCodeChallenge(from verifier: String) -> String {
 @MainActor func startSpotifyAuthorization() {
     let clientId = Secrets.spotifyClientId
     let redirectUri = Secrets.spotifyRedirectUri
-    let scope = "user-read-private user-read-email user-read-currently-playing user-read-playback-state"
+    let scope = "user-read-private user-read-email user-read-currently-playing user-read-playback-state user-top-read user-read-recently-played"
     
     
     let codeVerifier = generateRandomString(length: 128)

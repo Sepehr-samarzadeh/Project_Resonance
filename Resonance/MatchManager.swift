@@ -15,8 +15,12 @@ class MatchManager: ObservableObject {
     static let shared = MatchManager()
     
     @Published var potentialMatches: [PotentialMatch] = []
+    @Published var sharedTasteMatches: [SharedTasteMatch] = []
     @Published var pendingMatches: [Match] = []
     @Published var activeMatches: [Match] = []
+    
+    /// Combined count of active matches (for profile stat card)
+    var matches: [Match] { activeMatches }
     
     private let db = Firestore.firestore()
     private var listenersSnapshot: ListenerRegistration?
@@ -155,6 +159,12 @@ class MatchManager: ObservableObject {
             
             let match = Match(user1Id: currentUserId, user2Id: otherUserId, listening: listening)
             try db.collection("matches").addDocument(from: match)
+            
+            // Send push notification to the other user
+            let myDoc = try? await db.collection("users").document(currentUserId).getDocument()
+            let myName = myDoc?.data()?["name"] as? String ?? "Someone"
+            NotificationHelper.shared.sendMatchRequestNotification(to: otherUserId, from: myName)
+            
             return true
         } catch {
             return false
@@ -183,6 +193,12 @@ class MatchManager: ObservableObject {
             
             if updatedMatch.isBothAccepted {
                 await createChat(for: updatedMatch)
+                
+                // Notify the other user that match was accepted
+                let otherId = updatedMatch.otherUserId(myId: myUserId)
+                let myDoc = try? await db.collection("users").document(myUserId).getDocument()
+                let myName = myDoc?.data()?["name"] as? String ?? "Someone"
+                NotificationHelper.shared.sendMatchAcceptedNotification(to: otherId, from: myName)
             }
             
             return true
@@ -220,6 +236,78 @@ class MatchManager: ObservableObject {
             // Chat creation failed silently
         }
     }
+    
+    // MARK: - Shared Taste Discovery
+    
+    /// Finds users who share top artists with the current user.
+    /// Queries Firestore for users whose top_artist_ids overlap with ours.
+    func fetchSharedTasteUsers(currentUserId: String) async {
+        // Get my profile
+        do {
+            let myDoc = try await db.collection("users").document(currentUserId).getDocument()
+            guard let myData = myDoc.data(),
+                  let myArtistIds = myData["top_artist_ids"] as? [String],
+                  !myArtistIds.isEmpty else {
+                sharedTasteMatches = []
+                return
+            }
+            
+            let blockedIds = BlockManager.shared.blockedUserIds
+            
+            // Firestore array-contains can only check a single value at a time.
+            // We query for each of the user's top artist IDs (max 10)
+            // to find overlapping users, then merge results.
+            var userMatches: [String: SharedTasteMatch] = [:]
+            
+            for artistId in myArtistIds.prefix(10) {
+                let snapshot = try await db.collection("users")
+                    .whereField("top_artist_ids", arrayContains: artistId)
+                    .getDocuments()
+                
+                for doc in snapshot.documents {
+                    let userId = doc.documentID
+                    if userId == currentUserId { continue }
+                    if blockedIds.contains(userId) { continue }
+                    
+                    let data = doc.data()
+                    guard let user = AppUser(document: data) else { continue }
+                    
+                    let otherArtistIds = Set(data["top_artist_ids"] as? [String] ?? [])
+                    let sharedCount = Set(myArtistIds).intersection(otherArtistIds).count
+                    
+                    // Keep the best count for each user
+                    if let existing = userMatches[userId] {
+                        if sharedCount > existing.sharedArtistCount {
+                            userMatches[userId] = SharedTasteMatch(
+                                userId: userId,
+                                user: user,
+                                sharedArtistCount: sharedCount,
+                                sharedGenres: computeSharedGenres(myGenres: myData["favorite_genres"] as? [String], otherGenres: data["favorite_genres"] as? [String])
+                            )
+                        }
+                    } else {
+                        userMatches[userId] = SharedTasteMatch(
+                            userId: userId,
+                            user: user,
+                            sharedArtistCount: sharedCount,
+                            sharedGenres: computeSharedGenres(myGenres: myData["favorite_genres"] as? [String], otherGenres: data["favorite_genres"] as? [String])
+                        )
+                    }
+                }
+            }
+            
+            // Sort by shared artist count descending
+            sharedTasteMatches = userMatches.values
+                .sorted { $0.sharedArtistCount > $1.sharedArtistCount }
+        } catch {
+            sharedTasteMatches = []
+        }
+    }
+    
+    private func computeSharedGenres(myGenres: [String]?, otherGenres: [String]?) -> [String] {
+        guard let mine = myGenres, let theirs = otherGenres else { return [] }
+        return Array(Set(mine).intersection(Set(theirs)))
+    }
 }
 
 struct PotentialMatch: Identifiable {
@@ -234,6 +322,14 @@ struct PotentialMatch: Identifiable {
     }
 }
 
+struct SharedTasteMatch: Identifiable {
+    let id = UUID()
+    let userId: String
+    let user: AppUser
+    let sharedArtistCount: Int
+    let sharedGenres: [String]
+}
+
 
 struct DiscoveryView: View {
     @StateObject private var matchManager = MatchManager.shared
@@ -241,39 +337,79 @@ struct DiscoveryView: View {
     @State private var currentUserId: String?
     @State private var selectedMatch: PotentialMatch?
     @State private var showMatchPrompt = false
+    @State private var selectedTasteMatch: SharedTasteMatch?
+    @State private var showTasteMatchPrompt = false
     
     var body: some View {
         NavigationStack {
-            VStack {
-                // Current Listening Section
-                if let listening = nowPlayingManager.currentListening {
-                    currentListeningCard(listening)
-                } else {
-                    Text("Start playing music to find matches!")
-                        .foregroundColor(.gray)
-                        .padding()
-                }
-                
-                Divider()
-                
-                // Potential Matches
-                if matchManager.potentialMatches.isEmpty {
-                    VStack(spacing: 15) {
-                        Image(systemName: "person.2.slash")
-                            .font(.system(size: 50))
+            ScrollView {
+                VStack(spacing: 16) {
+                    // Current Listening Section
+                    if let listening = nowPlayingManager.currentListening {
+                        currentListeningCard(listening)
+                    } else {
+                        Text("Start playing music to find matches!")
                             .foregroundColor(.gray)
-                        Text("No one listening to similar music right now")
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
+                            .padding()
                     }
-                    .padding()
-                } else {
-                    List(matchManager.potentialMatches) { match in
-                        PotentialMatchRow(match: match)
-                            .onTapGesture {
-                                selectedMatch = match
-                                showMatchPrompt = true
+                    
+                    Divider()
+                    
+                    // Real-time Matches (same track / same artist)
+                    if matchManager.potentialMatches.isEmpty {
+                        VStack(spacing: 15) {
+                            Image(systemName: "person.2.slash")
+                                .font(.system(size: 50))
+                                .foregroundColor(.gray)
+                            Text("No one listening to similar music right now")
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding()
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Listening Now")
+                                .font(.headline)
+                                .padding(.horizontal)
+                            
+                            ForEach(matchManager.potentialMatches) { match in
+                                PotentialMatchRow(match: match)
+                                    .onTapGesture {
+                                        selectedMatch = match
+                                        showMatchPrompt = true
+                                    }
+                                    .padding(.horizontal)
                             }
+                        }
+                    }
+                    
+                    // Shared Taste Section
+                    if !matchManager.sharedTasteMatches.isEmpty {
+                        Divider()
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Image(systemName: "sparkles")
+                                    .foregroundColor(.green)
+                                Text("Shared Taste")
+                                    .font(.headline)
+                            }
+                            .padding(.horizontal)
+                            
+                            Text("People who listen to the same artists as you")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal)
+                            
+                            ForEach(matchManager.sharedTasteMatches) { tasteMatch in
+                                SharedTasteRow(tasteMatch: tasteMatch)
+                                    .onTapGesture {
+                                        selectedTasteMatch = tasteMatch
+                                        showTasteMatchPrompt = true
+                                    }
+                                    .padding(.horizontal)
+                            }
+                        }
                     }
                 }
             }
@@ -289,6 +425,15 @@ struct DiscoveryView: View {
                     )
                 }
             }
+            .sheet(isPresented: $showTasteMatchPrompt) {
+                if let tasteMatch = selectedTasteMatch,
+                   let userId = currentUserId {
+                    SharedTastePromptView(
+                        tasteMatch: tasteMatch,
+                        currentUserId: userId
+                    )
+                }
+            }
             .onAppear {
                 startDiscovery()
             }
@@ -301,12 +446,16 @@ struct DiscoveryView: View {
     func startDiscovery() {
         currentUserId = UserManager.shared.getCurrentUserId()
         
-        guard let userId = currentUserId,
-              let listening = nowPlayingManager.currentListening else {
-            return
+        guard let userId = currentUserId else { return }
+        
+        if let listening = nowPlayingManager.currentListening {
+            matchManager.startListening(currentUserId: userId, currentListening: listening)
         }
         
-        matchManager.startListening(currentUserId: userId, currentListening: listening)
+        // Fetch shared taste users (works even when not currently playing)
+        Task {
+            await matchManager.fetchSharedTasteUsers(currentUserId: userId)
+        }
     }
     
     func currentListeningCard(_ listening: CurrentListening) -> some View {
@@ -523,6 +672,170 @@ struct MatchPromptView: View {
                 currentUserId: currentUserId,
                 otherUserId: match.userId,
                 listening: currentListening
+            )
+            isCreatingMatch = false
+            dismiss()
+        }
+    }
+}
+
+
+// MARK: - Shared Taste Row
+
+struct SharedTasteRow: View {
+    let tasteMatch: SharedTasteMatch
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            ProfileImageView(
+                imageUrl: tasteMatch.user.imageUrl,
+                size: 50,
+                fallbackName: tasteMatch.user.name
+            )
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(tasteMatch.user.name)
+                    .font(.headline)
+                
+                HStack(spacing: 4) {
+                    Image(systemName: "music.mic")
+                        .font(.caption)
+                    Text("\(tasteMatch.sharedArtistCount) shared artist\(tasteMatch.sharedArtistCount == 1 ? "" : "s")")
+                }
+                .font(.caption)
+                .foregroundColor(.green)
+                
+                if !tasteMatch.sharedGenres.isEmpty {
+                    Text(tasteMatch.sharedGenres.joined(separator: ", "))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+            
+            Image(systemName: "sparkles")
+                .foregroundColor(.green)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .background(Color.white.opacity(0.03))
+        .cornerRadius(12)
+    }
+}
+
+
+// MARK: - Shared Taste Prompt View
+
+struct SharedTastePromptView: View {
+    @Environment(\.dismiss) var dismiss
+    let tasteMatch: SharedTasteMatch
+    let currentUserId: String
+    
+    @State private var isCreatingMatch = false
+    
+    var body: some View {
+        VStack(spacing: 30) {
+            Spacer()
+            
+            Image(systemName: "sparkles")
+                .font(.system(size: 60))
+                .foregroundColor(.green)
+            
+            ProfileImageView(
+                imageUrl: tasteMatch.user.imageUrl,
+                size: 100,
+                fallbackName: tasteMatch.user.name
+            )
+            
+            Text(tasteMatch.user.name)
+                .font(.title)
+                .bold()
+            
+            VStack(spacing: 8) {
+                Text("You share \(tasteMatch.sharedArtistCount) top artist\(tasteMatch.sharedArtistCount == 1 ? "" : "s")!")
+                    .font(.headline)
+                    .foregroundColor(.green)
+                
+                if let artistNames = tasteMatch.user.topArtistNames, !artistNames.isEmpty {
+                    Text(artistNames.prefix(5).joined(separator: ", "))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                
+                if !tasteMatch.sharedGenres.isEmpty {
+                    Text("Shared genres: \(tasteMatch.sharedGenres.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                if let bio = tasteMatch.user.bio, !bio.isEmpty {
+                    Text(bio)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 8)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding()
+            
+            Spacer()
+            
+            HStack(spacing: 20) {
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Not Now")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.gray.opacity(0.2))
+                        .foregroundColor(.primary)
+                        .cornerRadius(12)
+                }
+                
+                Button {
+                    sendMatchRequest()
+                } label: {
+                    if isCreatingMatch {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    } else {
+                        Text("Connect!")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                    }
+                }
+                .disabled(isCreatingMatch)
+            }
+            .padding()
+        }
+        .padding()
+    }
+    
+    func sendMatchRequest() {
+        isCreatingMatch = true
+        
+        Task {
+            // Create a lightweight CurrentListening for the match record
+            let placeholder = CurrentListening(
+                userId: tasteMatch.userId,
+                trackId: "",
+                trackName: "Shared taste match",
+                artistId: "",
+                artistName: "\(tasteMatch.sharedArtistCount) shared artists",
+                imageUrl: tasteMatch.user.imageUrl,
+                isPlaying: false
+            )
+            
+            let _ = await MatchManager.shared.createMatch(
+                currentUserId: currentUserId,
+                otherUserId: tasteMatch.userId,
+                listening: placeholder
             )
             isCreatingMatch = false
             dismiss()

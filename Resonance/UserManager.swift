@@ -38,6 +38,32 @@ class UserManager {
         ])
     }
     
+    // MARK: - Profile Editing
+    
+    func updateProfile(userId: String, bio: String?, favoriteGenres: [String]?) async throws {
+        var updates: [String: Any] = [:]
+        if let bio = bio { updates["bio"] = bio }
+        if let genres = favoriteGenres { updates["favorite_genres"] = genres }
+        
+        guard !updates.isEmpty else { return }
+        try await db.collection("users").document(userId).updateData(updates)
+    }
+    
+    func updateTopArtists(userId: String, artistIds: [String], artistNames: [String]) async throws {
+        try await db.collection("users").document(userId).updateData([
+            "top_artist_ids": artistIds,
+            "top_artist_names": artistNames
+        ])
+    }
+    
+    // MARK: - FCM Token
+    
+    func updateFCMToken(userId: String, token: String) {
+        db.collection("users").document(userId).updateData([
+            "fcm_token": token
+        ])
+    }
+    
     // MARK: - Account Deletion (Apple Requirement 5.1.1v)
     
     func deleteAccount(userId: String) async throws {

@@ -188,6 +188,16 @@ struct ChatView: View {
     
         messageText = ""
         
+        // Send push notification to the other user
+        let otherId = match.otherUserId(myId: currentUserId)
+        let myDoc = Firestore.firestore().collection("users").document(currentUserId)
+        Task {
+            let doc = try? await myDoc.getDocument()
+            let myName = doc?.data()?["name"] as? String ?? "Someone"
+            let preview = String(text.prefix(100))
+            NotificationHelper.shared.sendNewMessageNotification(to: otherId, from: myName, messagePreview: preview)
+        }
+        
         chatManager.sendMessage(chatId: chatId, senderId: currentUserId, text: text) { success in
             if !success {
                 

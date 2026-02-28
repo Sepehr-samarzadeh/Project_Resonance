@@ -229,6 +229,7 @@ struct BetterProfileView: View {
     @State private var showDeleteConfirmation = false
     @State private var isDeleting = false
     @State private var deleteError: String?
+    @State private var showEditProfile = false
     
     var body: some View {
         ZStack {
@@ -271,13 +272,100 @@ struct BetterProfileView: View {
                                     .font(.caption)
                                     .foregroundColor(.gray)
                             }
+                            
+                            // Edit Profile Button
+                            Button {
+                                showEditProfile = true
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "pencil")
+                                    Text("Edit Profile")
+                                }
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.green)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 8)
+                                .overlay(
+                                    Capsule()
+                                        .stroke(Color.green, lineWidth: 1.5)
+                                )
+                            }
                         }
                         .padding(.top, 60)
                         
+                        // Bio Section
+                        if let bio = user.bio, !bio.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("About")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Text(bio)
+                                    .font(.subheadline)
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(15)
+                            .padding(.horizontal)
+                        }
+                        
+                        // Favorite Genres
+                        if let genres = user.favoriteGenres, !genres.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Favorite Genres")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))], spacing: 6) {
+                                    ForEach(genres, id: \.self) { genre in
+                                        Text(genre)
+                                            .font(.caption)
+                                            .fontWeight(.medium)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
+                                            .background(Color.green.opacity(0.2))
+                                            .foregroundColor(.green)
+                                            .cornerRadius(12)
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(15)
+                            .padding(.horizontal)
+                        }
+                        
+                        // Top Artists
+                        if let artists = user.topArtistNames, !artists.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Top Artists")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                
+                                ForEach(artists.prefix(5), id: \.self) { artist in
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "music.mic")
+                                            .foregroundColor(.green)
+                                            .font(.caption)
+                                        Text(artist)
+                                            .font(.subheadline)
+                                            .foregroundColor(.white.opacity(0.9))
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(15)
+                            .padding(.horizontal)
+                        }
+                        
                         // Stats Cards
                         HStack(spacing: 15) {
-                            StatCard(title: "Matches", value: "0", icon: "heart.fill")
-                            StatCard(title: "Chats", value: "0", icon: "message.fill")
+                            StatCard(title: "Matches", value: "\(MatchManager.shared.matches.count)", icon: "heart.fill")
+                            StatCard(title: "Chats", value: "\(MatchManager.shared.matches.count)", icon: "message.fill")
                         }
                         .padding(.horizontal)
                         
@@ -335,6 +423,13 @@ struct BetterProfileView: View {
         }
         .onAppear {
             loadUser()
+        }
+        .sheet(isPresented: $showEditProfile) {
+            loadUser()
+        } content: {
+            if let user = user {
+                EditProfileView(user: user)
+            }
         }
         .alert("Delete Account", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
