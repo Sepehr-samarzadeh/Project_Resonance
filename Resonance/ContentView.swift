@@ -12,10 +12,13 @@ import FirebaseFirestore
 struct ContentView: View {
     @StateObject private var matchManager = MatchManager.shared
     @State private var isLoggedIn = false
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     
     var body: some View {
         Group {
-            if isLoggedIn {
+            if !hasCompletedOnboarding {
+                OnboardingView(hasCompletedOnboarding: $hasCompletedOnboarding)
+            } else if isLoggedIn {
                 TabView {
                     NowPlayingView()
                         .tabItem {

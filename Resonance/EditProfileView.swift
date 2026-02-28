@@ -114,7 +114,7 @@ struct EditProfileView: View {
                             HStack(spacing: 12) {
                                 if let imageUrl = artist.images?.last?.url,
                                    let url = URL(string: imageUrl) {
-                                    AsyncImage(url: url) { image in
+                                    CachedAsyncImage(url: url) { image in
                                         image.resizable()
                                     } placeholder: {
                                         Circle().fill(Color.gray.opacity(0.3))

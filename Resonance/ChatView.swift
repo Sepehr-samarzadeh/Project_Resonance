@@ -18,7 +18,9 @@ struct ChatView: View {
     @FocusState private var isTextFieldFocused: Bool
     @State private var showBlockConfirmation = false
     @State private var showReportSheet = false
+    @State private var showUnmatchConfirmation = false
     @State private var isBlocking = false
+    @State private var isUnmatching = false
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -61,6 +63,12 @@ struct ChatView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button(role: .destructive) {
+                        showUnmatchConfirmation = true
+                    } label: {
+                        Label("Unmatch & Delete Chat", systemImage: "person.crop.circle.badge.minus")
+                    }
+                    
+                    Button(role: .destructive) {
                         showBlockConfirmation = true
                     } label: {
                         Label("Block User", systemImage: "hand.raised.fill")
@@ -96,14 +104,27 @@ struct ChatView: View {
                 currentUserId: currentUserId
             )
         }
+        .confirmationDialog(
+            "Unmatch \(otherUser?.name ?? "this user")?",
+            isPresented: $showUnmatchConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Unmatch & Delete Chat", role: .destructive) {
+                unmatchUser()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will remove the match and delete the entire conversation. This action cannot be undone.")
+        }
         .overlay {
-            if isBlocking {
+            if isBlocking || isUnmatching {
                 Color.black.opacity(0.5)
                     .ignoresSafeArea()
                     .overlay {
                         VStack(spacing: 16) {
                             ProgressView().tint(.white)
-                            Text("Blocking user...").foregroundColor(.white)
+                            Text(isUnmatching ? "Removing match..." : "Blocking user...")
+                                .foregroundColor(.white)
                         }
                     }
             }
@@ -217,6 +238,16 @@ struct ChatView: View {
         Task {
             try? await BlockManager.shared.blockUser(blockerId: currentUserId, blockedId: blockedId)
             isBlocking = false
+            dismiss()
+        }
+    }
+    
+    func unmatchUser() {
+        isUnmatching = true
+        
+        Task {
+            let _ = await MatchManager.shared.unmatch(match)
+            isUnmatching = false
             dismiss()
         }
     }

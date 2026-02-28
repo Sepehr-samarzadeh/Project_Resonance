@@ -25,7 +25,7 @@ struct NowPlayingView: View {
                     // Album Art
                     if let imageUrl = listening.imageUrl,
                        let url = URL(string: imageUrl) {
-                        AsyncImage(url: url) { image in
+                        CachedAsyncImage(url: url) { image in
                             image
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)

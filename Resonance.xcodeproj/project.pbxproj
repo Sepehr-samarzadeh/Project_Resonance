@@ -44,7 +44,7 @@
 			files = (
 				AE9F91C22EEC44AF003D5D7C /* FirebaseAuth in Frameworks */,
 				AE9F91C42EEC44AF003D5D7C /* FirebaseFirestore in Frameworks */,
-						AE9F91C62EEC44AF003D5D7C /* FirebaseMessaging in Frameworks */,
+				AE9F91C62EEC44AF003D5D7C /* FirebaseMessaging in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

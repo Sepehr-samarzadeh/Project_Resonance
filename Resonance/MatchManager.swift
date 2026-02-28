@@ -221,6 +221,34 @@ class MatchManager: ObservableObject {
         }
     }
     
+    /// Unmatch: deletes the match, associated chat, and all messages.
+    func unmatch(_ match: Match) async -> Bool {
+        guard let matchId = match.id else { return false }
+        
+        do {
+            // Delete all messages for this chat
+            if let chatId = match.chatId {
+                let messages = try await db.collection("messages")
+                    .whereField("chat_id", isEqualTo: chatId)
+                    .getDocuments()
+                
+                let batch = db.batch()
+                for doc in messages.documents {
+                    batch.deleteDocument(doc.reference)
+                }
+                // Delete the chat document
+                batch.deleteDocument(db.collection("chats").document(chatId))
+                try await batch.commit()
+            }
+            
+            // Delete the match document
+            try await db.collection("matches").document(matchId).delete()
+            return true
+        } catch {
+            return false
+        }
+    }
+    
     private func createChat(for match: Match) async {
         guard let matchId = match.id else { return }
         
@@ -462,7 +490,7 @@ struct DiscoveryView: View {
         HStack(spacing: 12) {
             if let imageUrl = listening.imageUrl,
                let url = URL(string: imageUrl) {
-                AsyncImage(url: url) { image in
+                CachedAsyncImage(url: url) { image in
                     image.resizable()
                 } placeholder: {
                     Rectangle().fill(Color.gray)
@@ -579,7 +607,7 @@ struct MatchPromptView: View {
             if let user = user {
                 if let imageUrl = user.imageUrl,
                    let url = URL(string: imageUrl) {
-                    AsyncImage(url: url) { image in
+                    CachedAsyncImage(url: url) { image in
                         image.resizable()
                     } placeholder: {
                         Circle().fill(Color.gray)

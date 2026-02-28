@@ -205,6 +205,8 @@ struct PendingMatchCard: View {
 struct ActiveMatchesView: View {
     @StateObject private var matchManager = MatchManager.shared
     @State private var currentUserId: String?
+    @State private var matchToUnmatch: Match?
+    @State private var showUnmatchConfirmation = false
     
     var body: some View {
         NavigationStack {
@@ -234,6 +236,14 @@ struct ActiveMatchesView: View {
                                 } label: {
                                     ActiveMatchRow(match: match, currentUserId: currentUserId ?? "")
                                 }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        matchToUnmatch = match
+                                        showUnmatchConfirmation = true
+                                    } label: {
+                                        Label("Unmatch", systemImage: "person.crop.circle.badge.minus")
+                                    }
+                                }
                             }
                         }
                     }
@@ -242,6 +252,22 @@ struct ActiveMatchesView: View {
             .navigationTitle("Chats")
             .onAppear {
                 currentUserId = UserManager.shared.getCurrentUserId()
+            }
+            .confirmationDialog(
+                "Unmatch this person?",
+                isPresented: $showUnmatchConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Unmatch & Delete Chat", role: .destructive) {
+                    if let match = matchToUnmatch {
+                        Task {
+                            let _ = await MatchManager.shared.unmatch(match)
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { matchToUnmatch = nil }
+            } message: {
+                Text("This will remove the match and delete the entire conversation. This cannot be undone.")
             }
         }
     }
@@ -259,7 +285,7 @@ struct ActiveMatchRow: View {
             // profile Image
             if let imageUrl = otherUser?.imageUrl,
                let url = URL(string: imageUrl) {
-                AsyncImage(url: url) { image in
+                CachedAsyncImage(url: url) { image in
                     image.resizable()
                 } placeholder: {
                     Circle().fill(Color.gray)

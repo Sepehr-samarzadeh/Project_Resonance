@@ -24,25 +24,15 @@ struct ProfileImageView: View {
     var body: some View {
         Group {
             if let urlString = imageUrl, !urlString.isEmpty, let url = URL(string: urlString), !loadFailed {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                            .frame(width: size, height: size)
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: size, height: size)
-                            .clipShape(Circle())
-                    case .failure:
-                        fallbackInitials
-                            .onAppear {
-                                loadFailed = true
-                            }
-                    @unknown default:
-                        fallbackInitials
-                    }
+                CachedAsyncImage(url: url) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: size, height: size)
+                        .clipShape(Circle())
+                } placeholder: {
+                    ProgressView()
+                        .frame(width: size, height: size)
                 }
             } else {
                 fallbackInitials
@@ -224,6 +214,7 @@ struct FeatureRow: View {
 // MARK: - Better Profile View
 struct BetterProfileView: View {
     @Binding var isLoggedIn: Bool
+    @StateObject private var matchManager = MatchManager.shared
     @State private var user: AppUser?
     @State private var isLoading = true
     @State private var showDeleteConfirmation = false
@@ -364,21 +355,38 @@ struct BetterProfileView: View {
                         
                         // Stats Cards
                         HStack(spacing: 15) {
-                            StatCard(title: "Matches", value: "\(MatchManager.shared.matches.count)", icon: "heart.fill")
-                            StatCard(title: "Chats", value: "\(MatchManager.shared.matches.count)", icon: "message.fill")
+                            StatCard(title: "Matches", value: "\(matchManager.activeMatches.count)", icon: "heart.fill")
+                            StatCard(title: "Chats", value: "\(matchManager.activeMatches.filter { $0.chatId != nil }.count)", icon: "message.fill")
                         }
                         .padding(.horizontal)
                         
                         // Settings Section
-                        VStack(spacing: 0) {
-                            SettingRow(icon: "bell.fill", title: "Notifications", showChevron: true)
-                            Divider().padding(.leading, 50)
-                            SettingRow(icon: "person.fill.questionmark", title: "Privacy", showChevron: true)
-                            Divider().padding(.leading, 50)
-                            SettingRow(icon: "info.circle.fill", title: "About", showChevron: true)
+                        NavigationStack {
+                            VStack(spacing: 0) {
+                                NavigationLink {
+                                    NotificationsSettingsView()
+                                } label: {
+                                    SettingRow(icon: "bell.fill", title: "Notifications", showChevron: true)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                Divider().padding(.leading, 50)
+                                NavigationLink {
+                                    PrivacySettingsView()
+                                } label: {
+                                    SettingRow(icon: "person.fill.questionmark", title: "Privacy", showChevron: true)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                Divider().padding(.leading, 50)
+                                NavigationLink {
+                                    AboutView()
+                                } label: {
+                                    SettingRow(icon: "info.circle.fill", title: "About", showChevron: true)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(15)
                         }
-                        .background(Color.white.opacity(0.05))
-                        .cornerRadius(15)
                         .padding(.horizontal)
                         
                         // Logout Button
