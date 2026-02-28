@@ -70,6 +70,15 @@ struct ResonanceApp: App {
                     if let refreshToken = json["refresh_token"] as? String {
                         UserDefaults.standard.set(refreshToken, forKey: "spotify_refresh_token")
                     }
+                    
+                    // Register user and notify login complete
+                    do {
+                        let spotifyUser = try await SpotifyAPIManager.shared.getCurrentUserProfile()
+                        let _ = await UserManager.shared.registerUser(spotifyUser: spotifyUser)
+                        NotificationCenter.default.post(name: .didCompleteSpotifyLogin, object: nil)
+                    } catch {
+                        // Profile fetch failed but token is saved
+                    }
                 }
             } catch {
                 // Token exchange failed — user will need to log in again

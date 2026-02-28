@@ -84,6 +84,7 @@ struct ProfileImageView: View {
 
 // MARK: - Beautiful Login Screen
 struct BeautifulLoginView: View {
+    @Binding var isLoggedIn: Bool
     @State private var isAnimating = false
     
     var body: some View {
@@ -222,6 +223,7 @@ struct FeatureRow: View {
 
 // MARK: - Better Profile View
 struct BetterProfileView: View {
+    @Binding var isLoggedIn: Bool
     @State private var user: AppUser?
     @State private var isLoading = true
     @State private var showDeleteConfirmation = false
@@ -325,8 +327,8 @@ struct BetterProfileView: View {
                         .padding(.horizontal)
                         
                     } else {
-                        // Not logged in
-                        BeautifulLoginView()
+                        // Not logged in — auth gate handles this now
+                        BeautifulLoginView(isLoggedIn: $isLoggedIn)
                     }
                 }
             }
@@ -388,7 +390,9 @@ struct BetterProfileView: View {
         UserManager.shared.clearLocalData()
         NowPlayingManager.shared.stopTracking()
         MatchManager.shared.stopListening()
+        BlockManager.shared.stopListening()
         user = nil
+        isLoggedIn = false
     }
     
     func deleteAccount() {
@@ -402,6 +406,7 @@ struct BetterProfileView: View {
                 try await UserManager.shared.deleteAccount(userId: userId)
                 MatchManager.shared.stopListening()
                 user = nil
+                isLoggedIn = false
             } catch {
                 deleteError = error.localizedDescription
             }
@@ -467,7 +472,7 @@ struct SettingRow: View {
 
 // MARK: - Preview
 #Preview {
-    BeautifulLoginView()
+    BeautifulLoginView(isLoggedIn: .constant(false))
         .preferredColorScheme(.dark)
 }
 

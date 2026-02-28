@@ -14,18 +14,16 @@ class UserManager {
     
     private init() {}
     
-    func registerUser(spotifyUser: SpotifyUser, completion: @escaping (Bool) -> Void) {
+    func registerUser(spotifyUser: SpotifyUser) async -> Bool {
         let appUser = AppUser(from: spotifyUser)
         let data = appUser.toDictionary()
         
-        db.collection("users").document(appUser.id).setData(data, merge: true) { error in
-            if let error = error {
-                print("Error registering user: \(error)")
-                completion(false)
-            } else {
-                UserDefaults.standard.set(appUser.id, forKey: "current_user_id")
-                completion(true)
-            }
+        do {
+            try await db.collection("users").document(appUser.id).setData(data, merge: true)
+            UserDefaults.standard.set(appUser.id, forKey: "current_user_id")
+            return true
+        } catch {
+            return false
         }
     }
     

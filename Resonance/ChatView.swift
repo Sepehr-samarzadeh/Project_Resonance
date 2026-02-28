@@ -16,6 +16,10 @@ struct ChatView: View {
     @State private var messageText = ""
     @State private var otherUser: AppUser?
     @FocusState private var isTextFieldFocused: Bool
+    @State private var showBlockConfirmation = false
+    @State private var showReportSheet = false
+    @State private var isBlocking = false
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +57,57 @@ struct ChatView: View {
         }
         .navigationTitle(otherUser?.name ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(role: .destructive) {
+                        showBlockConfirmation = true
+                    } label: {
+                        Label("Block User", systemImage: "hand.raised.fill")
+                    }
+                    
+                    Button {
+                        showReportSheet = true
+                    } label: {
+                        Label("Report User", systemImage: "exclamationmark.triangle.fill")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundColor(.primary)
+                }
+            }
+        }
+        .confirmationDialog(
+            "Block \(otherUser?.name ?? "this user")?",
+            isPresented: $showBlockConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Block", role: .destructive) {
+                blockUser()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("They won't be able to message you or appear in your matches. This action cannot be undone.")
+        }
+        .sheet(isPresented: $showReportSheet) {
+            ReportUserView(
+                reportedUserId: match.otherUserId(myId: currentUserId),
+                reportedUserName: otherUser?.name ?? "User",
+                currentUserId: currentUserId
+            )
+        }
+        .overlay {
+            if isBlocking {
+                Color.black.opacity(0.5)
+                    .ignoresSafeArea()
+                    .overlay {
+                        VStack(spacing: 16) {
+                            ProgressView().tint(.white)
+                            Text("Blocking user...").foregroundColor(.white)
+                        }
+                    }
+            }
+        }
         .onAppear {
             loadOtherUser()
             chatManager.startListening(chatId: chatId)
@@ -144,8 +199,128 @@ struct ChatView: View {
     private var db: Firestore {
         Firestore.firestore()
     }
+    
+    func blockUser() {
+        isBlocking = true
+        let blockedId = match.otherUserId(myId: currentUserId)
+        
+        Task {
+            try? await BlockManager.shared.blockUser(blockerId: currentUserId, blockedId: blockedId)
+            isBlocking = false
+            dismiss()
+        }
+    }
 }
 
+
+// MARK: - Report User View
+struct ReportUserView: View {
+    let reportedUserId: String
+    let reportedUserName: String
+    let currentUserId: String
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedReason = ""
+    @State private var additionalDetails = ""
+    @State private var isSubmitting = false
+    @State private var showSuccess = false
+    
+    private let reasons = [
+        "Harassment or bullying",
+        "Spam or fake profile",
+        "Inappropriate content",
+        "Impersonation",
+        "Other"
+    ]
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("Report \(reportedUserName)")
+                        .font(.headline)
+                    Text("Help us keep Resonance safe. Select a reason for your report.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Section("Reason") {
+                    ForEach(reasons, id: \.self) { reason in
+                        Button {
+                            selectedReason = reason
+                        } label: {
+                            HStack {
+                                Text(reason)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if selectedReason == reason {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Section("Additional Details (optional)") {
+                    TextField("Tell us more...", text: $additionalDetails, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+                
+                Section {
+                    Button {
+                        submitReport()
+                    } label: {
+                        if isSubmitting {
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                Spacer()
+                            }
+                        } else {
+                            HStack {
+                                Spacer()
+                                Text("Submit Report")
+                                    .bold()
+                                    .foregroundColor(.white)
+                                Spacer()
+                            }
+                        }
+                    }
+                    .listRowBackground(selectedReason.isEmpty ? Color.gray : Color.red)
+                    .disabled(selectedReason.isEmpty || isSubmitting)
+                }
+            }
+            .navigationTitle("Report User")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .alert("Report Submitted", isPresented: $showSuccess) {
+                Button("OK") { dismiss() }
+            } message: {
+                Text("Thank you for helping keep Resonance safe. We'll review your report.")
+            }
+        }
+    }
+    
+    func submitReport() {
+        isSubmitting = true
+        
+        Task {
+            try? await BlockManager.shared.reportUser(
+                reporterId: currentUserId,
+                reportedId: reportedUserId,
+                reason: selectedReason,
+                context: additionalDetails
+            )
+            isSubmitting = false
+            showSuccess = true
+        }
+    }
+}
 
 struct MessageBubble: View {
     let message: Message

@@ -155,10 +155,9 @@ struct NowPlayingView: View {
         Task {
             do {
                 let spotifyUser = try await SpotifyAPIManager.shared.getCurrentUserProfile()
-                UserManager.shared.registerUser(spotifyUser: spotifyUser) { success in
-                    if success {
-                        self.currentUserId = spotifyUser.id
-                    }
+                let success = await UserManager.shared.registerUser(spotifyUser: spotifyUser)
+                if success {
+                    self.currentUserId = spotifyUser.id
                 }
             } catch {
                 // User not logged in or network error — handled by login flow

@@ -35,6 +35,7 @@ class MatchManager: ObservableObject {
                 guard let self = self else { return }
                 guard let documents = snapshot?.documents else { return }
                 
+                let blockedIds = BlockManager.shared.blockedUserIds
                 var matches: [PotentialMatch] = []
                 
                 for doc in documents {
@@ -42,6 +43,7 @@ class MatchManager: ObservableObject {
                     let userId = doc.documentID
                     
                     if userId == currentUserId { continue }
+                    if blockedIds.contains(userId) { continue }
                     
                     let trackId = data["track_id"] as? String ?? ""
                     let artistId = data["artist_id"] as? String ?? ""
@@ -104,6 +106,7 @@ class MatchManager: ObservableObject {
     private func handleMatchesSnapshot(snapshot: QuerySnapshot?, error: Error?, myUserId: String) {
         guard let documents = snapshot?.documents else { return }
         
+        let blockedIds = BlockManager.shared.blockedUserIds
         var pending: [Match] = []
         var active: [Match] = []
         
@@ -111,6 +114,9 @@ class MatchManager: ObservableObject {
             do {
                 var match = try doc.data(as: Match.self)
                 match.id = doc.documentID
+                
+                let otherId = match.otherUserId(myId: myUserId)
+                if blockedIds.contains(otherId) { continue }
                 
                 let amUser1 = match.user1Id == myUserId
                 let myStatus = amUser1 ? match.user1Accepted : match.user2Accepted
