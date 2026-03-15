@@ -69,11 +69,23 @@ class NowPlayingManager: ObservableObject {
                 default:
                     self.errorMessage = spotifyError.localizedDescription
                 }
+            } else {
+                // Catch DecodingError, URLError, and any other unexpected errors
+                self.errorMessage = "Error: \(error.localizedDescription)"
             }
         }
     }
     
     private func saveToFirebase(listening: CurrentListening) {
+        // Respect privacy settings (both default to true)
+        let showListening = UserDefaults.standard.object(forKey: "privacy_show_listening") as? Bool ?? true
+        let showInDiscovery = UserDefaults.standard.object(forKey: "privacy_show_profile") as? Bool ?? true
+        
+        guard showListening && showInDiscovery else {
+            // User opted out — remove any stale data and skip upload
+            removeFromFirebase(userId: listening.id)
+            return
+        }
         let data = listening.toDictionary()
         db.collection("current_listening").document(listening.id).setData(data)
     }

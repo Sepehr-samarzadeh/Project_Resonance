@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 @main
 struct ResonanceApp: App {
@@ -17,6 +18,10 @@ struct ResonanceApp: App {
                 .preferredColorScheme(.dark)
                 .onOpenURL { url in
                     handleSpotifyCallback(url: url)
+                }
+                .task {
+                    // Migrate tokens from UserDefaults to Keychain (one-time)
+                    KeychainHelper.migrateFromUserDefaultsIfNeeded()
                 }
         }
     }
@@ -34,7 +39,7 @@ struct ResonanceApp: App {
     }
     
     func exchangeCodeForToken(code: String) {
-        guard let codeVerifier = UserDefaults.standard.string(forKey: "code_verifier") else {
+        guard let codeVerifier = KeychainHelper.read(key: KeychainHelper.codeVerifier) else {
             return
         }
         
@@ -53,35 +58,62 @@ struct ResonanceApp: App {
             "code_verifier": codeVerifier
         ]
         
-        request.httpBody = bodyParams.map { "\($0.key)=\($0.value)" }
-            .joined(separator: "&")
-            .data(using: .utf8)
+        request.httpBody = urlEncodedFormData(bodyParams)
         
-        Task {
+        Task { @MainActor in
             do {
                 let (data, _) = try await URLSession.shared.data(for: request)
+                
+                if let raw = String(data: data, encoding: .utf8) {
+                    print("[LOGIN] Token exchange response: \(raw.prefix(500))")
+                }
+                
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    print("[LOGIN] Failed to parse token exchange JSON")
+                    return
+                }
+                
+                if let error = json["error"] as? String {
+                    print("[LOGIN] Token exchange error: \(error) - \(json["error_description"] ?? "")")
                     return
                 }
                 
                 if let accessToken = json["access_token"] as? String {
-                    UserDefaults.standard.set(accessToken, forKey: "spotify_access_token")
+                    KeychainHelper.save(key: KeychainHelper.spotifyAccessToken, value: accessToken)
+                    print("[LOGIN] Access token saved to Keychain")
                     
                     if let refreshToken = json["refresh_token"] as? String {
-                        UserDefaults.standard.set(refreshToken, forKey: "spotify_refresh_token")
+                        KeychainHelper.save(key: KeychainHelper.spotifyRefreshToken, value: refreshToken)
+                        print("[LOGIN] Refresh token saved to Keychain")
                     }
                     
-                    // Register user and notify login complete
+                    // Sign in with Firebase Anonymous Auth
+                    do {
+                        let uid = try await AuthManager.shared.ensureAuthenticated()
+                        print("[LOGIN] Firebase Auth succeeded, UID: \(uid)")
+                    } catch {
+                        print("[LOGIN] Firebase Auth failed: \(error.localizedDescription)")
+                        // Continue anyway -- Spotify auth succeeded
+                    }
+                    
+                    // Register user so current_user_id is set before we notify
                     do {
                         let spotifyUser = try await SpotifyAPIManager.shared.getCurrentUserProfile()
-                        let _ = await UserManager.shared.registerUser(spotifyUser: spotifyUser)
-                        NotificationCenter.default.post(name: .didCompleteSpotifyLogin, object: nil)
+                        print("[LOGIN] Got Spotify profile: \(spotifyUser.id)")
+                        let registered = await UserManager.shared.registerUser(spotifyUser: spotifyUser)
+                        print("[LOGIN] registerUser returned: \(registered)")
+                        print("[LOGIN] current_user_id is now: \(UserManager.shared.getCurrentUserId() ?? "nil")")
                     } catch {
-                        // Profile fetch failed but token is saved
+                        print("[LOGIN] Profile fetch failed: \(error)")
                     }
+                    
+                    print("[LOGIN] Posting didCompleteSpotifyLogin notification")
+                    NotificationCenter.default.post(name: .didCompleteSpotifyLogin, object: nil)
+                } else {
+                    print("[LOGIN] No access_token in response. Keys: \(json.keys)")
                 }
             } catch {
-                // Token exchange failed — user will need to log in again
+                print("[LOGIN] Token exchange network error: \(error)")
             }
         }
     }

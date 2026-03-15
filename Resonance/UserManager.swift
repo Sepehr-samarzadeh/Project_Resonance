@@ -6,6 +6,7 @@
 //
 import Foundation
 import FirebaseFirestore
+import FirebaseAuth
 
 @MainActor
 class UserManager {
@@ -16,13 +17,24 @@ class UserManager {
     
     func registerUser(spotifyUser: SpotifyUser) async -> Bool {
         let appUser = AppUser(from: spotifyUser)
-        let data = appUser.toDictionary()
+        var data = appUser.toDictionary()
         
+        // Store the Firebase Auth UID in the user document for security rule validation
+        if let firebaseUID = AuthManager.shared.firebaseUID {
+            data["firebase_uid"] = firebaseUID
+            print("[REGISTER] Firebase UID: \(firebaseUID)")
+        } else {
+            print("[REGISTER] WARNING: No Firebase UID available")
+        }
+        
+        print("[REGISTER] Writing user doc for id: \(appUser.id)")
         do {
             try await db.collection("users").document(appUser.id).setData(data, merge: true)
             UserDefaults.standard.set(appUser.id, forKey: "current_user_id")
+            print("[REGISTER] SUCCESS - current_user_id set to: \(appUser.id)")
             return true
         } catch {
+            print("[REGISTER] FAILED - Firestore error: \(error)")
             return false
         }
     }
@@ -32,6 +44,16 @@ class UserManager {
     }
     
     func updateOnlineStatus(userId: String, isOnline: Bool) {
+        // Respect "Show Online Status" privacy setting (defaults to true)
+        let showOnline = UserDefaults.standard.object(forKey: "privacy_show_online") as? Bool ?? true
+        guard showOnline else {
+            // User opted out — remove any stale online status
+            db.collection("users").document(userId).updateData([
+                "is_online": false,
+                "last_active": FieldValue.delete()
+            ])
+            return
+        }
         db.collection("users").document(userId).updateData([
             "is_online": isOnline,
             "last_active": Timestamp(date: Date())
@@ -86,18 +108,40 @@ class UserManager {
         // 4. Delete messages sent by user
         await deleteUserMessages(userId: userId)
         
-        // 5. Clear local data
+        // 5. Clear local data and sign out
         clearLocalData()
         NowPlayingManager.shared.stopTracking()
     }
     
     private func deleteUserMatches(userId: String) async {
+        // Helper: delete a match and its associated chat + messages (mirrors unmatch() logic)
+        func deleteMatchAndChat(_ doc: DocumentSnapshot) async {
+            let data = doc.data() ?? [:]
+            
+            // Delete the associated chat and its messages, if any
+            if let chatId = data["chat_id"] as? String {
+                if let messages = try? await db.collection("messages")
+                    .whereField("chat_id", isEqualTo: chatId)
+                    .getDocuments() {
+                    let batch = db.batch()
+                    for msgDoc in messages.documents {
+                        batch.deleteDocument(msgDoc.reference)
+                    }
+                    batch.deleteDocument(db.collection("chats").document(chatId))
+                    try? await batch.commit()
+                }
+            }
+            
+            // Delete the match document itself
+            try? await doc.reference.delete()
+        }
+        
         // Matches as user1
         if let snapshot = try? await db.collection("matches")
             .whereField("user1_id", isEqualTo: userId)
             .getDocuments() {
             for doc in snapshot.documents {
-                try? await doc.reference.delete()
+                await deleteMatchAndChat(doc)
             }
         }
         
@@ -106,7 +150,7 @@ class UserManager {
             .whereField("user2_id", isEqualTo: userId)
             .getDocuments() {
             for doc in snapshot.documents {
-                try? await doc.reference.delete()
+                await deleteMatchAndChat(doc)
             }
         }
     }
@@ -122,10 +166,14 @@ class UserManager {
     }
     
     func clearLocalData() {
-        UserDefaults.standard.removeObject(forKey: "spotify_access_token")
-        UserDefaults.standard.removeObject(forKey: "spotify_refresh_token")
+        // Clear Keychain (tokens)
+        KeychainHelper.deleteAll()
+        
+        // Clear non-sensitive UserDefaults
         UserDefaults.standard.removeObject(forKey: "current_user_id")
-        UserDefaults.standard.removeObject(forKey: "code_verifier")
+        
+        // Sign out of Firebase Auth
+        AuthManager.shared.signOut()
     }
 }
 

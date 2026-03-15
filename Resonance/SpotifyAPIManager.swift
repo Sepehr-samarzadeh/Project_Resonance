@@ -7,6 +7,18 @@
 
 import Foundation
 
+/// Properly percent-encodes a dictionary for application/x-www-form-urlencoded bodies.
+/// Raw string interpolation breaks when values contain +, =, &, or other reserved characters.
+func urlEncodedFormData(_ params: [String: String]) -> Data? {
+    var components = URLComponents()
+    components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
+    // URLComponents.percentEncodedQuery percent-encodes per RFC 3986.
+    // The "+" character is valid in query strings but means " " in form encoding,
+    // so we must also encode it.
+    let encoded = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+    return encoded?.data(using: .utf8)
+}
+
 enum SpotifyError: LocalizedError {
     case noAccessToken
     case noRefreshToken
@@ -40,13 +52,13 @@ class SpotifyAPIManager {
     private init() {}
     
     func getAccessToken() -> String? {
-        return UserDefaults.standard.string(forKey: "spotify_access_token")
+        return KeychainHelper.read(key: KeychainHelper.spotifyAccessToken)
     }
     
     // MARK: - Token Refresh
     
     func refreshAccessToken() async -> Bool {
-        guard let refreshToken = UserDefaults.standard.string(forKey: "spotify_refresh_token") else {
+        guard let refreshToken = KeychainHelper.read(key: KeychainHelper.spotifyRefreshToken) else {
             return false
         }
         
@@ -70,9 +82,7 @@ class SpotifyAPIManager {
             "client_id": clientId
         ]
         
-        request.httpBody = bodyParams.map { "\($0.key)=\($0.value)" }
-            .joined(separator: "&")
-            .data(using: .utf8)
+        request.httpBody = urlEncodedFormData(bodyParams)
         
         do {
             let (data, _) = try await URLSession.shared.data(for: request)
@@ -81,10 +91,10 @@ class SpotifyAPIManager {
                 return false
             }
             
-            UserDefaults.standard.set(accessToken, forKey: "spotify_access_token")
+            KeychainHelper.save(key: KeychainHelper.spotifyAccessToken, value: accessToken)
             
             if let newRefreshToken = json["refresh_token"] as? String {
-                UserDefaults.standard.set(newRefreshToken, forKey: "spotify_refresh_token")
+                KeychainHelper.save(key: KeychainHelper.spotifyRefreshToken, value: newRefreshToken)
             }
             
             return true
@@ -97,8 +107,11 @@ class SpotifyAPIManager {
     
     private func makeAuthenticatedRequest(url: URL, retryOnUnauthorized: Bool = true) async throws -> (Data, HTTPURLResponse) {
         guard let accessToken = getAccessToken() else {
+            print("[API] No access token in Keychain")
             throw SpotifyError.noAccessToken
         }
+        
+        print("[API] Request: \(url.path) (token: \(accessToken.prefix(20))...)")
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -110,8 +123,17 @@ class SpotifyAPIManager {
             throw SpotifyError.noData
         }
         
+        print("[API] Response: \(url.path) -> \(httpResponse.statusCode) (\(data.count) bytes)")
+        
+        if httpResponse.statusCode != 200 && httpResponse.statusCode != 204 {
+            if let body = String(data: data, encoding: .utf8) {
+                print("[API] Error body: \(body.prefix(500))")
+            }
+        }
+        
         // Token expired — try refreshing once
         if httpResponse.statusCode == 401 && retryOnUnauthorized {
+            print("[API] 401 - attempting token refresh...")
             let refreshed = await refreshAccessToken()
             if refreshed {
                 return try await makeAuthenticatedRequest(url: url, retryOnUnauthorized: false)
@@ -137,7 +159,11 @@ class SpotifyAPIManager {
             throw SpotifyError.nothingPlaying
         }
         
-        return try JSONDecoder().decode(SpotifyCurrentlyPlaying.self, from: data)
+        do {
+            return try JSONDecoder().decode(SpotifyCurrentlyPlaying.self, from: data)
+        } catch {
+            throw SpotifyError.decodingError(error)
+        }
     }
     
     // MARK: - Top Artists (for richer matching)

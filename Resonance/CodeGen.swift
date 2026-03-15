@@ -55,7 +55,7 @@ func generateCodeChallenge(from verifier: String) -> String {
     let codeVerifier = generateRandomString(length: 128)
     let codeChallenge = generateCodeChallenge(from: codeVerifier)
     
-    UserDefaults.standard.set(codeVerifier, forKey: "code_verifier")
+    KeychainHelper.save(key: KeychainHelper.codeVerifier, value: codeVerifier)
     
 
     var components = URLComponents(string: "https://accounts.spotify.com/authorize")
