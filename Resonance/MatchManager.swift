@@ -28,6 +28,10 @@ class MatchManager: ObservableObject {
     private var matchUser2Listener: ListenerRegistration?
     private var matchListenersActive = false
     
+    // Separate storage for each listener's results, merged into published properties
+    private var matchesAsUser1: [Match] = []
+    private var matchesAsUser2: [Match] = []
+    
     private init() {}
     
     func startListening(currentUserId: String, currentListening: CurrentListening?) {
@@ -77,15 +81,26 @@ class MatchManager: ObservableObject {
         startMatchListeners(userId: currentUserId)
     }
     
-    func stopListening() {
+    /// Stops only the discovery (current_listening) listener.
+    /// Match listeners remain active so Requests/Chats tabs keep working.
+    func stopDiscoveryListening() {
         listenersSnapshot?.remove()
+        listenersSnapshot = nil
+        potentialMatches = []
+    }
+    
+    /// Stops ALL listeners. Call this only on logout/account deletion.
+    func stopListening() {
+        stopDiscoveryListening()
         matchUser1Listener?.remove()
         matchUser2Listener?.remove()
-        listenersSnapshot = nil
         matchUser1Listener = nil
         matchUser2Listener = nil
         matchListenersActive = false
-        potentialMatches = []
+        matchesAsUser1 = []
+        matchesAsUser2 = []
+        pendingMatches = []
+        activeMatches = []
     }
     
     // MARK: - Centralized Match Listeners (called once, not per-view)
@@ -97,22 +112,31 @@ class MatchManager: ObservableObject {
         matchUser1Listener = db.collection("matches")
             .whereField("user1_id", isEqualTo: userId)
             .addSnapshotListener { [weak self] snapshot, error in
-                self?.handleMatchesSnapshot(snapshot: snapshot, error: error, myUserId: userId)
+                self?.handleMatchesAsUser1(snapshot: snapshot, error: error, myUserId: userId)
             }
         
         matchUser2Listener = db.collection("matches")
             .whereField("user2_id", isEqualTo: userId)
             .addSnapshotListener { [weak self] snapshot, error in
-                self?.handleMatchesSnapshot(snapshot: snapshot, error: error, myUserId: userId)
+                self?.handleMatchesAsUser2(snapshot: snapshot, error: error, myUserId: userId)
             }
     }
     
-    private func handleMatchesSnapshot(snapshot: QuerySnapshot?, error: Error?, myUserId: String) {
+    private func handleMatchesAsUser1(snapshot: QuerySnapshot?, error: Error?, myUserId: String) {
         guard let documents = snapshot?.documents else { return }
-        
+        matchesAsUser1 = parseMatches(from: documents, myUserId: myUserId)
+        mergeAndPublishMatches(myUserId: myUserId)
+    }
+    
+    private func handleMatchesAsUser2(snapshot: QuerySnapshot?, error: Error?, myUserId: String) {
+        guard let documents = snapshot?.documents else { return }
+        matchesAsUser2 = parseMatches(from: documents, myUserId: myUserId)
+        mergeAndPublishMatches(myUserId: myUserId)
+    }
+    
+    private func parseMatches(from documents: [QueryDocumentSnapshot], myUserId: String) -> [Match] {
         let blockedIds = BlockManager.shared.blockedUserIds
-        var pending: [Match] = []
-        var active: [Match] = []
+        var result: [Match] = []
         
         for doc in documents {
             do {
@@ -122,23 +146,35 @@ class MatchManager: ObservableObject {
                 let otherId = match.otherUserId(myId: myUserId)
                 if blockedIds.contains(otherId) { continue }
                 
-                let amUser1 = match.user1Id == myUserId
-                let myStatus = amUser1 ? match.user1Accepted : match.user2Accepted
-                let otherStatus = amUser1 ? match.user2Accepted : match.user1Accepted
-                
-                if amUser1 {
-                    if myStatus && otherStatus {
-                        active.append(match)
-                    }
-                } else {
-                    if !myStatus {
-                        pending.append(match)
-                    } else if myStatus && otherStatus {
-                        active.append(match)
-                    }
-                }
+                result.append(match)
             } catch {
                 // Skip malformed documents
+            }
+        }
+        
+        return result
+    }
+    
+    private func mergeAndPublishMatches(myUserId: String) {
+        let allMatches = matchesAsUser1 + matchesAsUser2
+        var pending: [Match] = []
+        var active: [Match] = []
+        
+        for match in allMatches {
+            let amUser1 = match.user1Id == myUserId
+            let myStatus = amUser1 ? match.user1Accepted : match.user2Accepted
+            let otherStatus = amUser1 ? match.user2Accepted : match.user1Accepted
+            
+            if amUser1 {
+                if myStatus && otherStatus {
+                    active.append(match)
+                }
+            } else {
+                if !myStatus {
+                    pending.append(match)
+                } else if myStatus && otherStatus {
+                    active.append(match)
+                }
             }
         }
         
@@ -466,7 +502,7 @@ struct DiscoveryView: View {
                 startDiscovery()
             }
             .onDisappear {
-                matchManager.stopListening()
+                matchManager.stopDiscoveryListening()
             }
         }
     }

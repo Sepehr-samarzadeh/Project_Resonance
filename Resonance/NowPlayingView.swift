@@ -149,6 +149,7 @@ struct NowPlayingView: View {
     func checkUserAndStartTracking() {
         if let userId = UserManager.shared.getCurrentUserId() {
             self.currentUserId = userId
+            startTracking()
             return
         }
         
@@ -158,6 +159,7 @@ struct NowPlayingView: View {
                 let success = await UserManager.shared.registerUser(spotifyUser: spotifyUser)
                 if success {
                     self.currentUserId = spotifyUser.id
+                    startTracking()
                 }
             } catch {
                 // User not logged in or network error — handled by login flow

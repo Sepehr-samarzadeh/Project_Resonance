@@ -36,7 +36,9 @@ struct PendingMatchesView: View {
                 } else {
                     List {
                         ForEach(matchManager.pendingMatches) { match in
-                            PendingMatchCard(match: match, currentUserId: currentUserId ?? "")
+                            if let userId = currentUserId {
+                                PendingMatchCard(match: match, currentUserId: userId)
+                            }
                         }
                     }
                 }
@@ -230,11 +232,11 @@ struct ActiveMatchesView: View {
                 } else {
                     List {
                         ForEach(matchManager.activeMatches) { match in
-                            if let chatId = match.chatId {
+                            if let chatId = match.chatId, let userId = currentUserId {
                                 NavigationLink {
-                                    ChatView(chatId: chatId, match: match, currentUserId: currentUserId ?? "")
+                                    ChatView(chatId: chatId, match: match, currentUserId: userId)
                                 } label: {
-                                    ActiveMatchRow(match: match, currentUserId: currentUserId ?? "")
+                                    ActiveMatchRow(match: match, currentUserId: userId)
                                 }
                                 .swipeActions(edge: .trailing) {
                                     Button(role: .destructive) {
